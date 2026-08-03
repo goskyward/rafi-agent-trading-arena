@@ -1,0 +1,20 @@
+{
+  "contractVersion": "1.0",
+  "engineVersion": "2.4.0-staging.1",
+  "scanCycleId": "scan-fixture-active",
+  "generatedAt": "2026-08-03T16:00:00.000Z",
+  "expiresAt": "2026-08-03T16:05:00.000Z",
+  "source": "COINBASE",
+  "boardStatus": "ACTIVE",
+  "evaluatedAssetCount": 75,
+  "qualifiedAssetCount": 3,
+  "opportunities": [
+    {"opportunityId":"opp-fixture-bico","productId":"BICO-USD","venue":"COINBASE","rank":1,"opportunityScore":84,"confidence":80,"referencePrice":0.42,"referencePriceObservedAt":"2026-08-03T16:00:00.000Z","generatedAt":"2026-08-03T16:00:00.000Z","expiresAt":"2026-08-03T16:05:00.000Z","intendedHorizonSeconds":14400,"tradability":"TRADABLE","marketDirection":"UP","signal":"ACCELERATING","signals":[{"code":"PRICE_CHANGE","value":8.2,"unit":"PERCENT","windowSeconds":86400,"observedAt":"2026-08-03T16:00:00.000Z"}],"riskFlags":[{"code":"PROXY_RISK_1","severity":"LOW","message":"Market conditions can change quickly."}],"qualified":true,"engineVersion":"2.4.0-staging.1","scanCycleId":"scan-fixture-active","upstreamIntelligence":{"changePercent":8.2}},
+    {"opportunityId":"opp-fixture-algo","productId":"ALGO-USD","venue":"COINBASE","rank":2,"opportunityScore":78,"confidence":74,"referencePrice":0.19,"referencePriceObservedAt":"2026-08-03T16:00:00.000Z","generatedAt":"2026-08-03T16:00:00.000Z","expiresAt":"2026-08-03T16:05:00.000Z","intendedHorizonSeconds":14400,"tradability":"TRADABLE","marketDirection":"DOWN","signal":"REVERSAL WATCH","signals":[{"code":"PRICE_CHANGE","value":-5.1,"unit":"PERCENT","windowSeconds":86400,"observedAt":"2026-08-03T16:00:00.000Z"}],"riskFlags":[],"qualified":true,"engineVersion":"2.4.0-staging.1","scanCycleId":"scan-fixture-active","upstreamIntelligence":{"changePercent":-5.1}},
+    {"opportunityId":"opp-fixture-zec","productId":"ZEC-USD","venue":"COINBASE","rank":3,"opportunityScore":72,"confidence":70,"referencePrice":51.25,"referencePriceObservedAt":"2026-08-03T16:00:00.000Z","generatedAt":"2026-08-03T16:00:00.000Z","expiresAt":"2026-08-03T16:05:00.000Z","intendedHorizonSeconds":14400,"tradability":"TRADABLE","marketDirection":"UP","signal":"BUILDING","signals":[{"code":"VOLUME_USD","value":25000000,"unit":"USD","windowSeconds":86400,"observedAt":"2026-08-03T16:00:00.000Z"}],"riskFlags":[],"qualified":true,"engineVersion":"2.4.0-staging.1","scanCycleId":"scan-fixture-active","upstreamIntelligence":{"changePercent":3.2}}
+  ],
+  "scoringMode": "market-data proxy v2",
+  "scoringNotice": "Fixture",
+  "cacheState": "MISS",
+  "staleState": false
+}

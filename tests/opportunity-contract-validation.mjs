@@ -1,0 +1,19 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { validateOpportunityBoard, boardAuthorizesBuys, findActiveOpportunity, stableStringify } from "../src/opportunity-contract.js";
+import { CodyStrategy, AtlasStrategy } from "../src/strategies.js";
+
+const fixture=async name=>JSON.parse(await readFile(new URL(`./fixtures/${name}`,import.meta.url),"utf8"));
+const active=await fixture("active-board.json"), now=new Date("2026-08-03T16:01:00.000Z");
+const first=await validateOpportunityBoard(active,now),second=await validateOpportunityBoard(JSON.parse(JSON.stringify(active)),now);
+assert.equal(first.board.opportunities.length,3);assert.equal(first.board.boardHash,second.board.boardHash);assert.equal(first.board.opportunities[0].productId,"BICO-USD");
+assert.equal(boardAuthorizesBuys(first.board,now.getTime()),true);assert.equal(findActiveOpportunity(first.board,"opp-fixture-bico","BICO-USD",now.getTime()).productId,"BICO-USD");
+const partial=await validateOpportunityBoard(await fixture("partially-rejected-board.json"),now);assert.equal(partial.board.opportunities.length,1);assert.equal(partial.rejectionCodes[0].code,"INVALID_COINBASE_PRODUCT");
+const empty=await validateOpportunityBoard(await fixture("empty-board.json"),now);assert.equal(empty.board.boardStatus,"EMPTY");assert.equal(boardAuthorizesBuys(empty.board,now.getTime()),false);
+const stale=await validateOpportunityBoard(await fixture("stale-board.json"),now);assert.equal(stale.board.boardStatus,"STALE");
+await assert.rejects(async()=>validateOpportunityBoard(await fixture("invalid-board.json"),now),/UNSUPPORTED_CONTRACT_MAJOR/);
+const agent={positions:{},metrics:{completedTrades:0}},assets={"BICO-USD":{price:.421},"ALGO-USD":{price:.188},"ZEC-USD":{price:51.3}},round={remainingSeconds:200};
+const cody=new CodyStrategy().decide({agent,opportunities:first.board.opportunities,assets,round});assert.equal(cody.decision,"TRADE");assert.equal(cody.productId,"BICO-USD");
+const atlas=new AtlasStrategy().decide({agent,opportunities:first.board.opportunities,assets,round});assert.equal(atlas.decision,"TRADE");assert.equal(atlas.productId,"ALGO-USD");
+assert.equal(stableStringify({b:1,a:2}),'{"a":2,"b":1}');
+console.log("Opportunity Contract v1.0 validation passed");

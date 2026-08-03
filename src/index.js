@@ -25,6 +25,10 @@ export default {
         await requireAdmin(request, env);
         return json({ ok: true, authenticated: true }, 200, cors);
       }
+      if (request.method === "GET" && path === "/arena/admin/audit-summary") {
+        await requireAdmin(request, env);
+        return json(await stub.getAuditSummary(), 200, cors);
+      }
       if (request.method === "POST" && ["/arena/start", "/arena/reset", "/arena/order", "/arena/settle"].includes(path)) {
         await requireAdmin(request, env);
         if (path === "/arena/start") return json(await stub.startCampaign(), 200, cors);

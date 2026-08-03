@@ -1,5 +1,5 @@
 export const SERVICE = "RA-FI Agent Trading Arena";
-export const VERSION = "1.0.0";
+export const VERSION = "1.1.0-staging.1";
 export const SCORING_VERSION = "1.0.0";
 export const EXECUTION_MODEL_VERSION = "1.0.0";
 export const ARENA_CONFIG = Object.freeze({
@@ -8,7 +8,10 @@ export const ARENA_CONFIG = Object.freeze({
   maximumRounds: 360,
   startingBalanceUsd: 1000000,
   agents: ["CODY", "ATLAS"],
-  supportedProducts: ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"],
+  diagnosticProducts: ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD"],
+  opportunityBoardMaximum: 50,
+  opportunityPayloadMaximumBytes: 1000000,
+  opportunityFutureSkewSeconds: 60,
   longOnly: true,
   leverageAllowed: false,
   shortingAllowed: false,
