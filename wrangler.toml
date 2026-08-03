@@ -42,6 +42,7 @@ class_name = "ArenaController"
 name = "rafi-agent-trading-arena-staging"
 
 [env.staging.vars]
+ARENA_UAT_MODE = "true"
 FEE_RATE_BPS = "40"
 SLIPPAGE_BPS = "5"
 SYNTHETIC_SPREAD_BPS = "4"

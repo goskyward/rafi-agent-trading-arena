@@ -1,8 +1,9 @@
 const hold=(productId,reasonCode,confidence=50)=>({action:"HOLD",productId,allocationPercent:null,positionPercent:null,reasonCode,confidence});
 
 export class CodyStrategy {
-  decide({agent,assets,round}) {
+  decide({agent,assets,round,uatMode=false}) {
     const position=Object.values(agent.positions||{})[0];
+    if(uatMode){const btc=assets["BTC-USD"]||Object.values(assets)[0];if(position){const heldSeconds=Math.max(0,(Date.now()-Date.parse(position.openedAt))/1000);if(heldSeconds>=20)return {action:"SELL",productId:position.symbol,allocationPercent:null,positionPercent:100,reasonCode:"UAT_CONTROLLED_EXIT",confidence:100};return hold(position.symbol,"UAT_MONITORING_POSITION",100);}if(agent.metrics?.completedTrades>0)return hold(btc?.productId||"BTC-USD","UAT_LIFECYCLE_COMPLETE",100);if(btc)return {action:"BUY",productId:btc.productId,allocationPercent:1,positionPercent:null,reasonCode:"UAT_CONTROLLED_ENTRY",confidence:100};}
     if(position){const asset=assets[position.symbol],change=asset?((asset.price-position.averageEntryPrice)/position.averageEntryPrice)*100:0;if(change>=1||change<=-0.8||round.remainingSeconds<=30)return {action:"SELL",productId:position.symbol,allocationPercent:null,positionPercent:100,reasonCode:change>=1?"CODY_MOMENTUM_TARGET":change<=-0.8?"CODY_RISK_EXIT":"CODY_ROUND_PRESSURE",confidence:82};return hold(position.symbol,"CODY_MONITOR_POSITION",68);}
     const ranked=Object.values(assets).sort((a,b)=>b.changePercent-a.changePercent),asset=ranked[0];
     if(!asset||asset.changePercent<0)return hold(asset?.productId||"BTC-USD","CODY_NO_POSITIVE_MOMENTUM",55);

@@ -13,6 +13,7 @@ const AGENT_CADENCE_MS = 15000;
 export class ArenaController extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
+    this.env = env;
     this.ctx.blockConcurrencyWhile(async () => {
       if (!(await this.ctx.storage.get(STATE_KEY))) await this.ctx.storage.put(STATE_KEY, createInitialState());
     });
@@ -98,7 +99,7 @@ export class ArenaController extends DurableObject {
     let state=await this.loadAndReconcile();if(state.campaign.status!=="ACTIVE")return;
     const bucket=Math.floor(now/AGENT_CADENCE_MS),decisionId=`${state.campaign.id}:${state.round.number}:${bucket}:${agentId}`,activity=state.agents[agentId].activity||defaultActivity();
     if(activity.decisionSequenceId===decisionId)return;
-    const decision=validateAgentDecision(AGENT_REGISTRY[agentId].decide({agent:state.agents[agentId],assets,round:state.round,campaign:state.campaign}));
+    const decision=validateAgentDecision(AGENT_REGISTRY[agentId].decide({agent:state.agents[agentId],assets,round:state.round,campaign:state.campaign,uatMode:this.env.ARENA_UAT_MODE==="true"}));
     activity.decisionSequenceId=decisionId;activity.decision=decision;activity.confidence=decision.confidence;activity.allocationPercent=decision.allocationPercent;activity.selectedProductId=decision.productId;activity.updatedAt=new Date(now).toISOString();activity.message=decision.reasonCode;
     if(decision.action==="HOLD"){activity.status=Object.keys(state.agents[agentId].positions).length?"MONITORING POSITION":"SCANNING MARKET";state.agents[agentId].activity=activity;await this.ctx.storage.put(STATE_KEY,state);return;}
     activity.status=decision.action==="BUY"?"PREPARING ORDER":"EXECUTING SELL";state.agents[agentId].activity=activity;await this.ctx.storage.put(STATE_KEY,state);
@@ -107,7 +108,7 @@ export class ArenaController extends DurableObject {
     try{const result=await this.executeOrderWithQuote(input,{productId:decision.productId,price:asset.price,observedAt:new Date(now).toISOString(),sourceTimestamp:asset.sourceTimestamp,ageSeconds:Math.max(0,(now-Date.parse(asset.sourceTimestamp))/1000),source:"RA-FI Opportunity Engine",stale:false,endpoint:asset.endpoint},decisionId);state=await this.loadAndReconcile();const next=state.agents[agentId].activity||activity;next.status=decision.action==="BUY"?"POSITION OPEN":"TRADE CLOSED";next.message=decision.action==="BUY"?"Worker accepted autonomous market buy":"Worker accepted autonomous market sell";next.activeOrderId=result.order.orderId;next.updatedAt=new Date().toISOString();state.agents[agentId].activity=next;await this.ctx.storage.put(STATE_KEY,state);}catch(error){state=await this.loadAndReconcile();const next=state.agents[agentId].activity||activity;next.status="ORDER REVIEW";next.message=error instanceof Error?error.message:"Order rejected";next.updatedAt=new Date().toISOString();state.agents[agentId].activity=next;await this.ctx.storage.put(STATE_KEY,state);}
   }
 
-  async recordOrchestratorFailure(error,now){const state=await this.loadAndReconcile();state.market={...(state.market||{}),status:"degraded"};for(const id of ARENA_CONFIG.agents){const activity=state.agents[id].activity||defaultActivity();activity.status=Object.keys(state.agents[id].positions).length?"MONITORING POSITION":"SCANNING MARKET";activity.message="Market intelligence temporarily unavailable";activity.updatedAt=new Date(now).toISOString();state.agents[id].activity=activity;}await this.ctx.storage.put(STATE_KEY,state);}
+  async recordOrchestratorFailure(error,now){const state=await this.loadAndReconcile(),detail=error instanceof Error?error.message:"Unknown market-context error";state.market={...(state.market||{}),status:"degraded",errorCode:error?.code||"MARKET_CONTEXT_ERROR"};for(const id of ARENA_CONFIG.agents){const activity=state.agents[id].activity||defaultActivity();activity.status=Object.keys(state.agents[id].positions).length?"MONITORING POSITION":"SCANNING MARKET";activity.message=`Market intelligence unavailable: ${detail}`;activity.updatedAt=new Date(now).toISOString();state.agents[id].activity=activity;}await this.ctx.storage.put(STATE_KEY,state);}
 
   async loadAndReconcile() {
     const stored = (await this.ctx.storage.get(STATE_KEY)) || createInitialState(), state = reconcileState(stored, Date.now());

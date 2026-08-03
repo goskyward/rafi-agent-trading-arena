@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 
 const source = await readFile(new URL("../src/arena-controller.js", import.meta.url), "utf8");
 assert.match(source, /async alarm\(\)/, "Durable Object alarm handler must exist");
+assert.match(source, /this\.env\s*=\s*env/, "Durable Object must retain environment bindings for alarm execution");
 assert.match(source, /setAlarm\(Date\.now\(\)\+AGENT_CADENCE_MS\)/, "active campaigns must reschedule the alarm");
 assert.match(source, /campaign\.id.*round\.number.*bucket.*agentId/s, "decision identity must include campaign, round, bucket, and agent");
 assert.match(source, /activity\.decisionSequenceId===decisionId/, "duplicate decision cycles must stop before execution");

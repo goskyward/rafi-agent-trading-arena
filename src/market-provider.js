@@ -19,17 +19,17 @@ export class OpportunityEngineMarketProvider {
 
   async getMarketContext() {
     if (!this.baseUrl) throw new ArenaError("UPSTREAM_UNAVAILABLE", "Opportunity Engine is not configured.", 503);
-    const payload = await this.fetchJson("/movers?view=all&limit=50", 5000), assets = {};
-    for (const productId of ARENA_CONFIG.supportedProducts) {
-      const symbol = productId.split("-")[0], asset = findAsset(payload, productId, symbol);
+    const assets = {}, endpoints=["/movers?view=all&limit=50","/market-pulse","/dashboard-summary"];let lastError;
+    for(const endpoint of endpoints){let payload;try{payload=await this.fetchJson(endpoint,5000);}catch(error){lastError=error;continue;}for (const productId of ARENA_CONFIG.supportedProducts) {
+      if(assets[productId])continue;const symbol = productId.split("-")[0], asset = findAsset(payload, productId, symbol);
       if (!asset) continue;
       const price = Number(asset.price ?? asset.currentPrice ?? asset.last ?? asset.lastPrice ?? asset.priceUsd), timestamp = validTimestamp(asset.updatedAt ?? asset.timestamp ?? payload.updatedAt ?? payload.generatedAt);
       if (!Number.isFinite(price) || price <= 0 || timestamp === null) continue;
       const ageSeconds = Math.max(0, (Date.now() - timestamp) / 1000);
       if (ageSeconds > maximumQuoteAgeSeconds(this.env)) continue;
-      assets[productId] = { productId, price, changePercent: Number(asset.changePercent ?? asset.percentChange ?? asset.change24h ?? asset.percent ?? 0) || 0, sourceTimestamp: new Date(timestamp).toISOString(), observedAt: new Date().toISOString(), source: "RA-FI Opportunity Engine", stale: false, endpoint: "/movers?view=all&limit=50" };
-    }
-    if (!Object.keys(assets).length) throw new ArenaError("PRICE_UNAVAILABLE", "No fresh supported market assets are available.", 503);
+      assets[productId] = { productId, price, changePercent: Number(asset.changePercent ?? asset.percentChange ?? asset.change24h ?? asset.percent ?? 0) || 0, sourceTimestamp: new Date(timestamp).toISOString(), observedAt: new Date().toISOString(), source: "RA-FI Opportunity Engine", stale: false, endpoint };
+    }if(Object.keys(assets).length)break;}
+    if (!Object.keys(assets).length) throw new ArenaError("PRICE_UNAVAILABLE", `No fresh supported market assets are available.${lastError?` ${safeMessage(lastError)}`:""}`, 503);
     return assets;
   }
 
