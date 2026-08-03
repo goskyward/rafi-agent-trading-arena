@@ -10,7 +10,7 @@ SYNTHETIC_SPREAD_BPS = "4"
 MAX_QUOTE_AGE_SECONDS = "90"
 CORS_ALLOWED_ORIGINS = "https://www.ra-fi.com,https://ra-fi.com"
 OPPORTUNITY_ENGINE_BASE_URL = "https://rafi-crypto-movers.camronra2020.workers.dev"
-DEVELOPMENT_DIAGNOSTICS = "false"
+ENABLE_DEV_DIAGNOSTICS = "true"
 
 [[durable_objects.bindings]]
 name = "ARENA"
@@ -34,7 +34,7 @@ SYNTHETIC_SPREAD_BPS = "4"
 MAX_QUOTE_AGE_SECONDS = "90"
 CORS_ALLOWED_ORIGINS = "https://preview.ra-fi.com"
 OPPORTUNITY_ENGINE_BASE_URL = "https://rafi-crypto-movers.camronra2020.workers.dev"
-DEVELOPMENT_DIAGNOSTICS = "true"
+ENABLE_DEV_DIAGNOSTICS = "true"
 
 [[env.preview.durable_objects.bindings]]
 name = "ARENA"
@@ -50,7 +50,7 @@ SYNTHETIC_SPREAD_BPS = "4"
 MAX_QUOTE_AGE_SECONDS = "90"
 CORS_ALLOWED_ORIGINS = "https://www.ra-fi.com,https://ra-fi.com"
 OPPORTUNITY_ENGINE_BASE_URL = "https://rafi-crypto-movers.camronra2020.workers.dev"
-DEVELOPMENT_DIAGNOSTICS = "false"
+ENABLE_DEV_DIAGNOSTICS = "true"
 
 [[env.production.durable_objects.bindings]]
 name = "ARENA"
