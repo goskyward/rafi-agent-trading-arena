@@ -1,7 +1,7 @@
 name = "rafi-agent-trading-arena"
 main = "src/index.js"
 compatibility_date = "2026-08-02"
-compatibility_flags = ["nodejs_compat"]
+compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 
 [vars]
 FEE_RATE_BPS = "40"

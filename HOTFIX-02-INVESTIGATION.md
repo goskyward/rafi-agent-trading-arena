@@ -23,7 +23,9 @@ The temporary public diagnostic fields, protected diagnostic route, diagnostic f
 
 ## Root cause and correction
 
-Cloudflare production returned a platform-style plain-text 404 when the provider passed a `URL` object directly as the `fetch()` input, despite the object resolving correctly. The provider now retains `new URL()` for safe construction and passes the resulting `.href` string to `fetch()`.
+Cloudflare production returned a platform-style plain-text 404 because the Arena and Opportunity Engine are Workers on the same Cloudflare account and the Arena used global `fetch()` without enabling public Worker-to-Worker subrequests. External calls were unaffected, which explains the direct HTTP 200 result.
+
+The mission requires `OPPORTUNITY_ENGINE_BASE_URL` rather than a Service Binding, so `global_fetch_strictly_public` is enabled alongside `nodejs_compat`. The provider retains `new URL()` for safe construction and passes the resulting `.href` string to `fetch()`.
 
 ## Runtime variable
 

@@ -2,7 +2,8 @@
 
 ## Hotfix 02
 
-- Corrected Cloudflare production upstream requests by passing the safely resolved URL's `.href` string to `fetch()`.
+- Enabled `global_fetch_strictly_public` for the required URL-based Worker-to-Worker integration.
+- Passes the safely resolved URL's `.href` string to `fetch()`.
 - Removed all temporary upstream diagnostic fields, route, flag, and trace logging after capture.
 
 ## Opportunity Engine URL hardening
