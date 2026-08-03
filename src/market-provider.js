@@ -9,19 +9,8 @@ export class OpportunityEngineMarketProvider {
 
   async health() {
     if (!this.baseUrl) return { reachable: false, status: "not_configured" };
-    try {
-      const probe = await this.probeHealth();
-      const diagnostics = this.diagnosticsEnabled() ? healthDiagnostics(probe) : {};
-      return { reachable: probe.payload?.ok === true, status: probe.payload?.ok === true ? "online" : "degraded", ...diagnostics };
-    } catch (error) {
-      const diagnostics = this.diagnosticsEnabled() && error?.diagnostics ? error.diagnostics : {};
-      return { reachable: false, status: "unavailable", error: safeMessage(error), ...diagnostics };
-    }
-  }
-
-  async diagnosticHealth() {
-    const probe = await this.probeHealth();
-    return { status: probe.response.status, service: safeText(probe.payload?.service), version: safeText(probe.payload?.version), contentType: probe.contentType };
+    try { const payload = await this.fetchJson("/health", 3000); return { reachable: payload?.ok === true, status: payload?.ok === true ? "online" : "degraded" }; }
+    catch (error) { return { reachable: false, status: "unavailable", error: safeMessage(error) }; }
   }
 
   async getOpportunityWatch() { return this.fetchJson("/opportunity-watch", 5000); }
@@ -53,7 +42,7 @@ export class OpportunityEngineMarketProvider {
   async fetchJson(path, timeoutMs) {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(this.resolveUrl(path), { headers: { Accept: "application/json" }, signal: controller.signal });
+      const response = await fetch(this.resolveUrl(path).href, { headers: { Accept: "application/json" }, signal: controller.signal });
       const length = Number(response.headers.get("content-length") || 0);
       if (length > 2000000) throw new Error("Upstream payload exceeds limit");
       if (!response.ok) throw new Error(`Upstream HTTP ${response.status}`);
@@ -66,38 +55,12 @@ export class OpportunityEngineMarketProvider {
     } finally { clearTimeout(timeout); }
   }
 
-  async probeHealth() {
-    const path = "/health", provider = "OpportunityEngineMarketProvider", resolvedUrl = this.resolveUrl(path), controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 3000);
-    console.log(JSON.stringify({ event: "arena_upstream_health_request", resolvedUrl: resolvedUrl.href, path, provider }));
-    try {
-      const response = await fetch(resolvedUrl, { headers: { Accept: "application/json" }, signal: controller.signal });
-      const contentType = response.headers.get("content-type") || "";
-      console.log(JSON.stringify({ event: "arena_upstream_health_response", resolvedUrl: resolvedUrl.href, httpStatus: response.status, path, provider }));
-      let payload = null;
-      try { payload = await response.json(); } catch {}
-      const probe = { response, payload, resolvedUrl, path, provider, contentType };
-      if (!response.ok) {
-        const error = new Error(`Upstream HTTP ${response.status}`);
-        error.diagnostics = healthDiagnostics(probe);
-        throw error;
-      }
-      return probe;
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") throw new ArenaError("UPSTREAM_UNAVAILABLE", "Opportunity Engine request timed out.", 503);
-      throw error;
-    } finally { clearTimeout(timeout); }
-  }
-
   resolveUrl(path) {
     if (!this.baseUrl) throw new ArenaError("UPSTREAM_UNAVAILABLE", "Opportunity Engine is not configured.", 503);
     return new URL(path, `${this.baseUrl}/`);
   }
 
-  diagnosticsEnabled() { return this.env.ENABLE_DEV_DIAGNOSTICS === "true"; }
 }
-
-function healthDiagnostics(probe) { return { upstreamHealthUrl: probe.resolvedUrl.href, providerPath: `${probe.provider}.health`, httpStatus: probe.response.status, contentType: probe.contentType }; }
-function safeText(value) { return typeof value === "string" ? value.slice(0, 100) : null; }
 
 function findAsset(payload, productId, symbol) {
   const queue = [payload], seen = new Set();

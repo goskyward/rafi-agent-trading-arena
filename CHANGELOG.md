@@ -1,5 +1,10 @@
 # Implementation Change Log
 
+## Hotfix 02
+
+- Corrected Cloudflare production upstream requests by passing the safely resolved URL's `.href` string to `fetch()`.
+- Removed all temporary upstream diagnostic fields, route, flag, and trace logging after capture.
+
 ## Opportunity Engine URL hardening
 
 - Persisted the provider environment, normalized whitespace and all trailing slashes, and switched upstream requests to `new URL()` construction.

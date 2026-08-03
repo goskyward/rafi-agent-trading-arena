@@ -16,10 +16,6 @@ export default {
         const [durableObject, upstream] = await Promise.all([stub.health().catch(() => ({ available: false })), new OpportunityEngineMarketProvider(env).health()]);
         return json({ ok: true, service: SERVICE, version: VERSION, status: upstream.reachable ? "online" : "degraded", serverTime: new Date().toISOString(), simulation: true, executionModelVersion: EXECUTION_MODEL_VERSION, durableObject, opportunityEngine: upstream }, 200, cors);
       }
-      if (request.method === "GET" && path === "/diagnostics/upstream-health") {
-        await requireAdmin(request, env);
-        return json({ ok: true, ...(await new OpportunityEngineMarketProvider(env).diagnosticHealth()) }, 200, cors);
-      }
       if (request.method === "GET" && path === "/arena") return json(await stub.getArena(), 200, cors);
       if (request.method === "GET" && path === "/arena/scoreboard") return json(await stub.getScoreboard(), 200, cors);
       if (request.method === "GET" && path === "/arena/agents") return json(await stub.getAgents(), 200, cors);
