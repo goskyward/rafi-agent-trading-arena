@@ -1,0 +1,4 @@
+# Copy to .dev.vars for local development. Never commit the real token.
+OPPORTUNITY_ENGINE_BASE_URL=https://your-opportunity-engine.workers.dev
+ARENA_ADMIN_TOKEN=replace-with-a-long-random-secret
+MAX_QUOTE_AGE_SECONDS=90

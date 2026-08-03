@@ -1,0 +1,46 @@
+name: Deploy Arena Worker
+
+on:
+  workflow_run:
+    workflows: ["Validate Arena Worker"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arena-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      vars.CLOUDFLARE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Deploy through Wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+          secrets: |
+            ARENA_ADMIN_TOKEN
+            OPPORTUNITY_ENGINE_BASE_URL
+            COINGECKO_DEMO_KEY
+        env:
+          ARENA_ADMIN_TOKEN: ${{ secrets.ARENA_ADMIN_TOKEN }}
+          OPPORTUNITY_ENGINE_BASE_URL: ${{ secrets.OPPORTUNITY_ENGINE_BASE_URL }}
+          COINGECKO_DEMO_KEY: ${{ secrets.COINGECKO_DEMO_KEY }}

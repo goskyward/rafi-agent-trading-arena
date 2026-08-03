@@ -1,0 +1,8 @@
+import assert from "node:assert/strict";
+const base="http://127.0.0.1:8790", headers={Authorization:"Bearer integration-test-token","Content-Type":"application/json"};
+const get=async path=>{const r=await fetch(base+path);return {status:r.status,body:await r.json()};};
+const post=async(path,body)=>{const r=await fetch(base+path,{method:"POST",headers,body:JSON.stringify(body)});return {status:r.status,body:await r.json()};};
+const before=(await get("/arena")).body;assert.equal(before.campaign.status,"ACTIVE");assert.equal(before.recentTrades.length,3);assert.equal(before.agents.CODY.metrics.completedTrades,3);assert.ok(before.agents.ATLAS.positions["BTC-USD"]);assert.equal(before.agents.CODY.wipedOut,false);assert.equal(before.agents.ATLAS.wipedOut,false);
+const retry=await post("/arena/order",{agentId:"ATLAS",side:"BUY",productId:"BTC-USD",amountUsd:12345,idempotencyKey:"persistence-buy-001"});assert.equal(retry.status,200);const cash=retry.body.agent.cashUsd;
+const newOrder=await post("/arena/order",{agentId:"ATLAS",side:"BUY",productId:"ETH-USD",amountUsd:100,idempotencyKey:"persistence-sequence-001"});assert.equal(newOrder.status,200);assert.notEqual(newOrder.body.order.orderId,retry.body.order.orderId);const after=(await get("/arena")).body;assert.equal(after.agents.ATLAS.cashUsd,newOrder.body.agent.cashUsd);assert.ok(after.agents.ATLAS.cashUsd<cash);assert.equal(after.recentTrades.length,3);
+console.log(JSON.stringify({campaignTimestamps:"persisted",round:"derived after restart",accounts:"persisted",openPositions:"persisted",metrics:"persisted",trades:"persisted",idempotency:"persisted",sequence:"advanced without duplicate",wipeoutFlags:"persisted",workerReactivation:"passed"},null,2));

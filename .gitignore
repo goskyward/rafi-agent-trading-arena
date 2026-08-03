@@ -1,0 +1,15 @@
+.dev.vars
+.env
+.env.*
+!.env.example
+.wrangler/
+.wrangler-config/
+node_modules/
+dist/
+dist-*/
+*.log
+*.out.txt
+*.err.txt
+*.zip
+rafi-agent-trading-arena-confirmation/
+rafi-agent-trading-arena-review/

@@ -1,0 +1,36 @@
+import assert from "node:assert/strict";
+import { allocateCategoryPoints, calculateScores } from "../src/scoring.js";
+import { ARENA_CONFIG, executionModel } from "../src/config.js";
+import { assertFiniteTree } from "../src/utils.js";
+import { calculateBuyExecution, calculateSellExecution, classifyTrade, conservativeLiquidationValue, weightedAverageEntry } from "../src/execution-math.js";
+import { campaignView, deriveRound, reconcileState } from "../src/clocks.js";
+
+const metrics = overrides => ({ completedTrades: 0, winningTrades: 0, losingTrades: 0, breakEvenTrades: 0, grossProfitUsd: 0, grossLossUsd: 0, realizedNetProfitUsd: 0, unrealizedNetProfitUsd: 0, winRatePercent: 0, successfulTrades: 0, profitableUniqueAssets: [], biggestSingleWinnerPercent: 0, biggestSingleWinnerTradeId: null, wipeouts: 0, ...overrides });
+const agent = (metricOverrides = {}, equity = 1000000) => ({ startingBalanceUsd: 1000000, accountEquityUsd: equity, metrics: metrics(metricOverrides), score: {} });
+
+assert.deepEqual(allocateCategoryPoints(0, 0, 20), { CODY: 10, ATLAS: 10 });
+assert.deepEqual(allocateCategoryPoints(3, 1, 20), { CODY: 15, ATLAS: 5 });
+const agents = { CODY: agent({ completedTrades: 1, winningTrades: 1, successfulTrades: 1, profitableUniqueAssets: ["BTC-USD"], biggestSingleWinnerPercent: 4 }, 999990), ATLAS: agent({ completedTrades: 5, winningTrades: 3, losingTrades: 2, successfulTrades: 3, profitableUniqueAssets: ["ETH-USD", "SOL-USD"], biggestSingleWinnerPercent: 2 }, 999980) };
+calculateScores(agents);
+assert.ok(Math.abs(agents.CODY.score.total + agents.ATLAS.score.total - 100) < 1e-9);
+assert.equal(agents.CODY.score.netProfit, 50, "less-negative transform awards net-profit category correctly");
+assert.ok(agents.CODY.score.winRate < 10, "one trade is sample-size adjusted");
+assert.ok(agents.ATLAS.score.marketIntelligence > agents.CODY.score.marketIntelligence, "unique profitable assets drive intelligence points");
+assert.ok(agents.CODY.score.biggestSingleWinner > agents.ATLAS.score.biggestSingleWinner, "best single percentage drives category");
+const breakEven = { CODY: agent({ completedTrades: 1, breakEvenTrades: 1, successfulTrades: 1 }), ATLAS: agent({}) }; calculateScores(breakEven); assert.equal(breakEven.CODY.score.successfulTrades, 15);
+for (const [cody, atlas, relation] of [[1010000,1005000,"greater"],[995000,980000,"greater"],[990000,990000,"equal"],[1000000,1000000,"equal"]]) { const pair={CODY:agent({},cody),ATLAS:agent({},atlas)}; calculateScores(pair); relation==="greater"?assert.ok(pair.CODY.score.netProfit>pair.ATLAS.score.netProfit):assert.equal(pair.CODY.score.netProfit,pair.ATLAS.score.netProfit); assert.ok(pair.CODY.score.netProfit>=0&&pair.ATLAS.score.netProfit>=0&&pair.CODY.score.netProfit+pair.ATLAS.score.netProfit<=50+1e-9); }
+const model = executionModel({ FEE_RATE_BPS: "40", SLIPPAGE_BPS: "5", SYNTHETIC_SPREAD_BPS: "4" });
+assert.deepEqual(model, { version: "1.0.0", feeRateBps: 40, slippageBps: 5, syntheticSpreadBps: 4, simulated: true });
+assert.equal(ARENA_CONFIG.campaignDurationSeconds, 86400); assert.equal(ARENA_CONFIG.maximumRounds, 360); assert.equal(ARENA_CONFIG.startingBalanceUsd, 1000000);
+const start=Date.parse('2026-08-03T00:00:00.000Z'),campaign={id:'test',status:'ACTIVE',startedAt:new Date(start).toISOString(),endsAt:new Date(start+86400000).toISOString(),completedAt:null,durationSeconds:86400,maximumRounds:360};
+assert.equal(deriveRound(campaign,start).number,1);assert.equal(deriveRound(campaign,start+239000).number,1);assert.equal(deriveRound(campaign,start+240000).number,2);assert.equal(deriveRound(campaign,start+86399999).number,360);assert.equal(campaignView(campaign,start+43200000).remainingSeconds,43200);
+const clockBoundaries=[[0,1,"ACTIVE"],[239000,1,"ACTIVE"],[240000,2,"ACTIVE"],[241000,2,"ACTIVE"],[86159000,359,"ACTIVE"],[86160000,360,"ACTIVE"],[86399000,360,"ACTIVE"],[86400000,360,"COMPLETED"]];for(const [offset,round,status] of clockBoundaries){const reconciled=reconcileState({campaign:{...campaign},round:{}},start+offset),view=campaignView(reconciled.campaign,start+offset),derived=deriveRound(reconciled.campaign,start+offset);assert.equal(derived.number,round);assert.equal(view.status,status);assert.ok(view.remainingSeconds>=0);assert.ok(view.progressPercent>=0&&view.progressPercent<=100);}
+const expired=reconcileState({campaign:{...campaign},round:{}},start+86400000);assert.equal(expired.campaign.status,'COMPLETED');assert.equal(expired.round.number,360);assert.equal(expired.round.status,'COMPLETED');
+assertFiniteTree({ agents, model });
+const buy = calculateBuyExecution(100, 1000, model); assert.ok(buy.fillPrice > 100); assert.equal(buy.feeUsd, 4); assert.equal(buy.totalCashDebitUsd, 1004);
+const sell = calculateSellExecution(110, buy.quantity, model); assert.ok(sell.fillPrice < 110); assert.ok(sell.feeUsd > 0); assert.equal(sell.netProceedsUsd, sell.grossProceedsUsd - sell.feeUsd);
+assert.ok(conservativeLiquidationValue(100, 1, model) < 100, "equity uses conservative liquidation value");
+const average = weightedAverageEntry(2, 100, 1, 130); assert.equal(average, 110);
+assert.deepEqual([0.02,0.01,0.005,0,-0.005,-0.01,-0.02].map(classifyTrade),["WIN","BREAK_EVEN","BREAK_EVEN","BREAK_EVEN","BREAK_EVEN","BREAK_EVEN","LOSS"]);
+assert.throws(() => assertFiniteTree({ bad: NaN })); assert.throws(() => assertFiniteTree({ bad: Infinity }));
+console.log(JSON.stringify({ scoringTotal: agents.CODY.score.total + agents.ATLAS.score.total, tiedCategory: "passed", losingNetProfitTransform: "passed", sampleSizeAdjustment: "passed", successfulBreakEven: "passed", uniqueAssetScoring: "passed", biggestWinnerPercent: "passed", entryFee: buy.feeUsd, exitFee: sell.feeUsd, weightedAverageBasis: average, classifications: [classifyTrade(1),classifyTrade(-1),classifyTrade(0)], finiteJsonGuard: "passed", config: ARENA_CONFIG, executionModel: model }, null, 2));

@@ -1,0 +1,16 @@
+{
+  "status": "PASS",
+  "criticalTestsPassing": true,
+  "skippedCriticalTests": 0,
+  "suites": {
+    "campaign": "PASS", "clockBoundaries": "PASS", "orderValidation": "PASS",
+    "accounting": "PASS", "partialSell": "PASS", "scoring": "PASS",
+    "quoteFreshness": "PASS", "quoteTransactionRevalidation": "PASS",
+    "idempotency": "PASS", "concurrency": "PASS", "wipeout": "PASS",
+    "security": "PASS", "apiContract": "PASS", "persistenceAndReactivation": "PASS",
+    "staticValidation": "PASS", "wranglerDefaultDryRun": "PASS",
+    "wranglerPreviewDryRun": "PASS", "wranglerProductionDryRun": "PASS"
+  },
+  "deploymentPerformed": false,
+  "opportunityEngineModified": false
+}
