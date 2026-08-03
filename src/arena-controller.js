@@ -247,6 +247,7 @@ function initializeAuditSchema(sql){
   sql.exec("CREATE INDEX IF NOT EXISTS idx_opportunity_records_scan ON opportunity_records(scan_cycle_id)");
   sql.exec("CREATE INDEX IF NOT EXISTS idx_agent_decisions_campaign ON agent_decisions(campaign_id, decided_at)");
 }
-function publicAgents(agents){return Object.fromEntries(Object.entries(agents).map(([id,agent])=>[id,{...agent,positions:Object.fromEntries(Object.entries(agent.positions||{}).map(([product,position])=>[product,publicPosition(position)]))}]));}
-function publicPosition(position){const {boardHash,scanCycleId,decisionId,strategyVersion,executionModelVersion,...publicValue}=position;return publicValue;}
-function publicTrade(trade){const {boardHash,scanCycleId,decisionId,closeDecisionId,strategyVersion,...publicValue}=trade;return publicValue;}
+function publicAgents(agents){return Object.fromEntries(Object.entries(agents).map(([id,agent])=>[id,{...agent,activity:publicActivity(agent.activity),positions:Object.fromEntries(Object.entries(agent.positions||{}).map(([product,position])=>[product,publicPosition(position)]))}]));}
+function publicActivity(activity={}){const {message,decisionSequenceId,...publicValue}=activity;return publicValue;}
+function publicPosition(position){const {opportunityId,boardHash,scanCycleId,decisionId,strategyVersion,executionModelVersion,...publicValue}=position;return publicValue;}
+function publicTrade(trade){const {opportunityId,boardHash,scanCycleId,decisionId,closeDecisionId,strategyVersion,...publicValue}=trade;return publicValue;}
