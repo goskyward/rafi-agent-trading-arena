@@ -7,6 +7,7 @@ const price=(product,value)=>fetch(`${upstream}/__price/${encodeURIComponent(pro
 const results={}; let r;
 
 r=await request("/health");assert.equal(r.status,200);assert.equal(r.body.durableObject.available,true);results.health="passed";
+r=await request("/arena/admin/verify");assert.equal(r.status,401);r=await request("/arena/admin/verify",{headers:auth});assert.equal(r.status,200);assert.equal(r.body.authenticated,true);results.commanderAuthentication="passed";
 await post("/arena/reset",{confirm:"RESET_ARENA"});for(const path of ["/arena/start","/arena/reset","/arena/order","/arena/settle"]){r=await post(path,path==="/arena/reset"?{confirm:"RESET_ARENA"}:undefined,false);assert.equal(r.status,401);assert.equal(r.body.error.code,"UNAUTHORIZED");}
 r=await post("/arena/start");assert.equal(r.status,200);assert.equal(Date.parse(r.body.campaign.endsAt)-Date.parse(r.body.campaign.startedAt),86400000);assert.equal(r.body.round.number,1);assert.equal(r.body.scoreboard.leader,"TIE");
 r=await post("/arena/start");assert.equal(r.status,409);assert.equal(r.body.error.code,"CAMPAIGN_ALREADY_ACTIVE");results.campaign="passed";

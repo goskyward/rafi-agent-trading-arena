@@ -21,6 +21,10 @@ export default {
       if (request.method === "GET" && path === "/arena/agents") return json(await stub.getAgents(), 200, cors);
       if (request.method === "GET" && path === "/arena/positions") return json(await stub.getPositions(), 200, cors);
       if (request.method === "GET" && path === "/arena/trades") return json(await stub.getTrades(), 200, cors);
+      if (request.method === "GET" && path === "/arena/admin/verify") {
+        await requireAdmin(request, env);
+        return json({ ok: true, authenticated: true }, 200, cors);
+      }
       if (request.method === "POST" && ["/arena/start", "/arena/reset", "/arena/order", "/arena/settle"].includes(path)) {
         await requireAdmin(request, env);
         if (path === "/arena/start") return json(await stub.startCampaign(), 200, cors);
