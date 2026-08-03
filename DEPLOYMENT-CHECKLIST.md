@@ -20,7 +20,6 @@ After approval, configure the GitHub `production` environment and these reposito
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
 - `ARENA_ADMIN_TOKEN`
-- `OPPORTUNITY_ENGINE_BASE_URL`
 - `COINGECKO_DEMO_KEY` (reserved; currently unused)
 
 Then set repository variable `CLOUDFLARE_DEPLOY_ENABLED=true`. A successful push to `main` will run validation and deploy through Wrangler. Cloudflare runtime variables for fees, slippage, spread, quote age, and CORS are versioned in `wrangler.toml`; credentials are secrets.

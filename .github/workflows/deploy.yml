@@ -38,9 +38,7 @@ jobs:
           command: deploy
           secrets: |
             ARENA_ADMIN_TOKEN
-            OPPORTUNITY_ENGINE_BASE_URL
             COINGECKO_DEMO_KEY
         env:
           ARENA_ADMIN_TOKEN: ${{ secrets.ARENA_ADMIN_TOKEN }}
-          OPPORTUNITY_ENGINE_BASE_URL: ${{ secrets.OPPORTUNITY_ENGINE_BASE_URL }}
           COINGECKO_DEMO_KEY: ${{ secrets.COINGECKO_DEMO_KEY }}

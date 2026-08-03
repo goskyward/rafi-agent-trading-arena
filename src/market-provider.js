@@ -2,12 +2,16 @@ import { ARENA_CONFIG, maximumQuoteAgeSeconds } from "./config.js";
 import { ArenaError } from "./utils.js";
 
 export class OpportunityEngineMarketProvider {
-  constructor(env) { this.baseUrl = String(env.OPPORTUNITY_ENGINE_BASE_URL || "").replace(/\/$/, ""); }
+  constructor(env) {
+    this.env = env;
+    this.baseUrl = String(env.OPPORTUNITY_ENGINE_BASE_URL || "").trim().replace(/\/+$/, "");
+  }
 
   async health() {
     if (!this.baseUrl) return { reachable: false, status: "not_configured" };
-    try { const payload = await this.fetchJson("/health", 3000); return { reachable: payload?.ok === true, status: payload?.ok === true ? "online" : "degraded" }; }
-    catch (error) { return { reachable: false, status: "unavailable", error: safeMessage(error) }; }
+    const diagnostics = this.env.DEVELOPMENT_DIAGNOSTICS === "true" ? { upstreamHealthUrl: this.resolveUrl("/health").href } : {};
+    try { const payload = await this.fetchJson("/health", 3000); return { reachable: payload?.ok === true, status: payload?.ok === true ? "online" : "degraded", ...diagnostics }; }
+    catch (error) { return { reachable: false, status: "unavailable", error: safeMessage(error), ...diagnostics }; }
   }
 
   async getOpportunityWatch() { return this.fetchJson("/opportunity-watch", 5000); }
@@ -39,7 +43,7 @@ export class OpportunityEngineMarketProvider {
   async fetchJson(path, timeoutMs) {
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(`${this.baseUrl}${path}`, { headers: { Accept: "application/json" }, signal: controller.signal });
+      const response = await fetch(this.resolveUrl(path), { headers: { Accept: "application/json" }, signal: controller.signal });
       const length = Number(response.headers.get("content-length") || 0);
       if (length > 2000000) throw new Error("Upstream payload exceeds limit");
       if (!response.ok) throw new Error(`Upstream HTTP ${response.status}`);
@@ -50,6 +54,11 @@ export class OpportunityEngineMarketProvider {
       if (error instanceof Error && error.name === "AbortError") throw new ArenaError("UPSTREAM_UNAVAILABLE", "Opportunity Engine request timed out.", 503);
       throw error;
     } finally { clearTimeout(timeout); }
+  }
+
+  resolveUrl(path) {
+    if (!this.baseUrl) throw new ArenaError("UPSTREAM_UNAVAILABLE", "Opportunity Engine is not configured.", 503);
+    return new URL(path, `${this.baseUrl}/`);
   }
 }
 

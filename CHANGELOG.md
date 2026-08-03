@@ -1,5 +1,11 @@
 # Implementation Change Log
 
+## Opportunity Engine URL hardening
+
+- Persisted the provider environment, normalized whitespace and all trailing slashes, and switched upstream requests to `new URL()` construction.
+- Pinned the public Opportunity Engine base URL in Wrangler runtime variables.
+- Added the resolved health URL only when development diagnostics are enabled.
+
 ## Confirmation pass
 
 - Changed authoritative Net Profit scoring to marked equity minus starting capital.
