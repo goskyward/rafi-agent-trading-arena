@@ -17,6 +17,22 @@ export class OpportunityEngineMarketProvider {
   async getMovers() { return this.fetchJson("/movers?view=all&limit=50", 5000); }
   async getDashboardSummary() { return this.fetchJson("/dashboard-summary", 5000); }
 
+  async getMarketContext() {
+    if (!this.baseUrl) throw new ArenaError("UPSTREAM_UNAVAILABLE", "Opportunity Engine is not configured.", 503);
+    const payload = await this.fetchJson("/movers?view=all&limit=50", 5000), assets = {};
+    for (const productId of ARENA_CONFIG.supportedProducts) {
+      const symbol = productId.split("-")[0], asset = findAsset(payload, productId, symbol);
+      if (!asset) continue;
+      const price = Number(asset.price ?? asset.currentPrice ?? asset.last ?? asset.lastPrice ?? asset.priceUsd), timestamp = validTimestamp(asset.updatedAt ?? asset.timestamp ?? payload.updatedAt ?? payload.generatedAt);
+      if (!Number.isFinite(price) || price <= 0 || timestamp === null) continue;
+      const ageSeconds = Math.max(0, (Date.now() - timestamp) / 1000);
+      if (ageSeconds > maximumQuoteAgeSeconds(this.env)) continue;
+      assets[productId] = { productId, price, changePercent: Number(asset.changePercent ?? asset.percentChange ?? asset.change24h ?? asset.percent ?? 0) || 0, sourceTimestamp: new Date(timestamp).toISOString(), observedAt: new Date().toISOString(), source: "RA-FI Opportunity Engine", stale: false, endpoint: "/movers?view=all&limit=50" };
+    }
+    if (!Object.keys(assets).length) throw new ArenaError("PRICE_UNAVAILABLE", "No fresh supported market assets are available.", 503);
+    return assets;
+  }
+
   async getMarketQuote(productId) {
     if (!ARENA_CONFIG.supportedProducts.includes(productId)) throw new ArenaError("INVALID_PRODUCT", "The requested product is unsupported.");
     if (!this.baseUrl) throw new ArenaError("UPSTREAM_UNAVAILABLE", "Opportunity Engine is not configured.", 503);

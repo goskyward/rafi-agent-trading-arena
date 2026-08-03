@@ -5,8 +5,10 @@ import { calculateScores } from "./scoring.js";
 import { calculateBuyExecution, calculateSellExecution, classifyTrade, conservativeLiquidationValue, weightedAverageEntry } from "./execution-math.js";
 import { ArenaError, finite, iso, roundMoney } from "./utils.js";
 import { campaignView, deriveRound, reconcileState } from "./clocks.js";
+import { AGENT_REGISTRY, validateAgentDecision } from "./strategies.js";
 
 const STATE_KEY = "arena-state-v1";
+const AGENT_CADENCE_MS = 15000;
 
 export class ArenaController extends DurableObject {
   constructor(ctx, env) {
@@ -32,24 +34,45 @@ export class ArenaController extends DurableObject {
       next.campaign = { id: `campaign-${crypto.randomUUID()}`, status: "ACTIVE", startedAt: iso(now), endsAt: iso(now + ARENA_CONFIG.campaignDurationSeconds * 1000), completedAt: null, durationSeconds: ARENA_CONFIG.campaignDurationSeconds, maximumRounds: ARENA_CONFIG.maximumRounds };
       next.round = deriveRound(next.campaign, now); await txn.put(STATE_KEY, next); return next;
     });
+    await this.ctx.storage.setAlarm(now + 1000);
     return this.buildArenaPayload(state, false);
   }
 
   async resetCampaign(confirmation) {
     if (confirmation !== "RESET_ARENA") throw new ArenaError("INVALID_CONFIRMATION", "Reset requires confirm: RESET_ARENA.");
-    const state = createInitialState(); state.resetAt = new Date().toISOString(); await this.ctx.storage.put(STATE_KEY, state);
+    const state = createInitialState(); state.resetAt = new Date().toISOString(); await this.ctx.storage.put(STATE_KEY, state); await this.ctx.storage.deleteAlarm();
     return { ok: true, resetAt: state.resetAt, campaign: state.campaign };
+  }
+
+  async alarm() {
+    const now=Date.now();
+    try {
+      let state=await this.loadAndReconcile();
+      if(state.campaign.status!=="ACTIVE")return;
+      const assets=await new OpportunityEngineMarketProvider(this.env).getMarketContext();
+      state=await this.updateMarketAndActivities(state,assets,now);
+      for(const agentId of ARENA_CONFIG.agents)await this.runAgentDecision(agentId,assets,now);
+    } catch(error) {
+      await this.recordOrchestratorFailure(error,now);
+      console.error(JSON.stringify({event:"arena_agent_cycle_error",message:error instanceof Error?error.message:"Unknown error"}));
+    } finally {
+      const latest=await this.ctx.storage.get(STATE_KEY);
+      if(latest?.campaign?.status==="ACTIVE")await this.ctx.storage.setAlarm(Date.now()+AGENT_CADENCE_MS);
+    }
   }
 
   async settle() { const state = await this.markState(await this.loadAndReconcile(), true); return this.buildArenaPayload(state, false); }
 
   async submitOrder(input, requestId) {
     validateOrderShape(input);
-    const fingerprint = orderFingerprint(input);
-    const initial = await this.loadAndReconcile(); assertActive(initial);
-    if (initial.idempotency[input.idempotencyKey]) return resolveIdempotency(initial.idempotency[input.idempotencyKey], fingerprint);
+    const initial = await this.loadAndReconcile(); assertActive(initial); const fingerprint=orderFingerprint(input); if(initial.idempotency[input.idempotencyKey])return resolveIdempotency(initial.idempotency[input.idempotencyKey],fingerprint);
     const quote = await new OpportunityEngineMarketProvider(this.env).getMarketQuote(input.productId);
-    const model = executionModel(this.env), now = Date.now();
+    return this.executeOrderWithQuote(input,quote,requestId);
+  }
+
+  async executeOrderWithQuote(input,quote,requestId) {
+    validateOrderShape(input);
+    const fingerprint=orderFingerprint(input),model=executionModel(this.env),now=Date.now();
     return this.ctx.storage.transaction(async txn => {
       const state = reconcileState((await txn.get(STATE_KEY)) || createInitialState(), now); assertActive(state);
       if (state.idempotency[input.idempotencyKey]) return resolveIdempotency(state.idempotency[input.idempotencyKey], fingerprint);
@@ -62,6 +85,29 @@ export class ArenaController extends DurableObject {
       return result;
     });
   }
+
+  async updateMarketAndActivities(state,assets,now){
+    const previous=state.market?.assets||{},bounded={};
+    for(const [id,asset] of Object.entries(assets)){const series=[...(previous[id]?.recentPrices||[]),asset.price].slice(-24);bounded[id]={price:asset.price,changePercent:asset.changePercent,updatedAt:asset.sourceTimestamp,recentPrices:series};}
+    state.market={status:"live",updatedAt:new Date(now).toISOString(),source:"RA-FI Opportunity Engine",assets:bounded};
+    for(const id of ARENA_CONFIG.agents)state.agents[id].activity={...(state.agents[id].activity||defaultActivity()),status:"EVALUATING ASSET",message:"Reviewing shared live market context",updatedAt:new Date(now).toISOString()};
+    await this.ctx.storage.put(STATE_KEY,state);return state;
+  }
+
+  async runAgentDecision(agentId,assets,now){
+    let state=await this.loadAndReconcile();if(state.campaign.status!=="ACTIVE")return;
+    const bucket=Math.floor(now/AGENT_CADENCE_MS),decisionId=`${state.campaign.id}:${state.round.number}:${bucket}:${agentId}`,activity=state.agents[agentId].activity||defaultActivity();
+    if(activity.decisionSequenceId===decisionId)return;
+    const decision=validateAgentDecision(AGENT_REGISTRY[agentId].decide({agent:state.agents[agentId],assets,round:state.round,campaign:state.campaign}));
+    activity.decisionSequenceId=decisionId;activity.decision=decision;activity.confidence=decision.confidence;activity.allocationPercent=decision.allocationPercent;activity.selectedProductId=decision.productId;activity.updatedAt=new Date(now).toISOString();activity.message=decision.reasonCode;
+    if(decision.action==="HOLD"){activity.status=Object.keys(state.agents[agentId].positions).length?"MONITORING POSITION":"SCANNING MARKET";state.agents[agentId].activity=activity;await this.ctx.storage.put(STATE_KEY,state);return;}
+    activity.status=decision.action==="BUY"?"PREPARING ORDER":"EXECUTING SELL";state.agents[agentId].activity=activity;await this.ctx.storage.put(STATE_KEY,state);
+    const asset=assets[decision.productId];if(!asset)return;
+    const input={agentId,side:decision.action,productId:decision.productId,idempotencyKey:`agent-${decisionId.replace(/[^A-Za-z0-9._:-]/g,"-")}`,...(decision.action==="BUY"?{allocationPercent:decision.allocationPercent}:{positionPercent:decision.positionPercent})};
+    try{const result=await this.executeOrderWithQuote(input,{productId:decision.productId,price:asset.price,observedAt:new Date(now).toISOString(),sourceTimestamp:asset.sourceTimestamp,ageSeconds:Math.max(0,(now-Date.parse(asset.sourceTimestamp))/1000),source:"RA-FI Opportunity Engine",stale:false,endpoint:asset.endpoint},decisionId);state=await this.loadAndReconcile();const next=state.agents[agentId].activity||activity;next.status=decision.action==="BUY"?"POSITION OPEN":"TRADE CLOSED";next.message=decision.action==="BUY"?"Worker accepted autonomous market buy":"Worker accepted autonomous market sell";next.activeOrderId=result.order.orderId;next.updatedAt=new Date().toISOString();state.agents[agentId].activity=next;await this.ctx.storage.put(STATE_KEY,state);}catch(error){state=await this.loadAndReconcile();const next=state.agents[agentId].activity||activity;next.status="ORDER REVIEW";next.message=error instanceof Error?error.message:"Order rejected";next.updatedAt=new Date().toISOString();state.agents[agentId].activity=next;await this.ctx.storage.put(STATE_KEY,state);}
+  }
+
+  async recordOrchestratorFailure(error,now){const state=await this.loadAndReconcile();state.market={...(state.market||{}),status:"degraded"};for(const id of ARENA_CONFIG.agents){const activity=state.agents[id].activity||defaultActivity();activity.status=Object.keys(state.agents[id].positions).length?"MONITORING POSITION":"SCANNING MARKET";activity.message="Market intelligence temporarily unavailable";activity.updatedAt=new Date(now).toISOString();state.agents[id].activity=activity;}await this.ctx.storage.put(STATE_KEY,state);}
 
   async loadAndReconcile() {
     const stored = (await this.ctx.storage.get(STATE_KEY)) || createInitialState(), state = reconcileState(stored, Date.now());
@@ -84,7 +130,7 @@ export class ArenaController extends DurableObject {
       account.metrics.unrealizedNetProfitUsd = roundMoney(unrealized); account.accountEquityUsd = roundMoney(account.cashUsd + positionValue);
       if (account.accountEquityUsd <= ARENA_CONFIG.wipeoutThresholdUsd && !account.wipedOut) { account.wipedOut = true; account.metrics.wipeouts++; }
     }
-    calculateScores(state.agents); state.market = { status: degraded ? "degraded" : "live", updatedAt: newest, source: "RA-FI Opportunity Engine" };
+    calculateScores(state.agents); state.market = { ...state.market, status: degraded ? "degraded" : "live", updatedAt: newest||state.market?.updatedAt||null, source: "RA-FI Opportunity Engine" };
     if (persist) await this.ctx.storage.put(STATE_KEY, state); return state;
   }
 
@@ -97,7 +143,8 @@ export class ArenaController extends DurableObject {
 function createInitialState() {
   return { campaign: { id: null, status: "NOT_STARTED", startedAt: null, endsAt: null, completedAt: null, durationSeconds: ARENA_CONFIG.campaignDurationSeconds, maximumRounds: ARENA_CONFIG.maximumRounds }, round: { number: 0, startedAt: null, endsAt: null, durationSeconds: ARENA_CONFIG.roundDurationSeconds, status: "PENDING", remainingSeconds: ARENA_CONFIG.roundDurationSeconds, progressPercent: 0 }, agents: Object.fromEntries(ARENA_CONFIG.agents.map(id => [id, createAgent(id)])), trades: [], idempotency: {}, sequence: { nextOrderNumber: 1, nextTradeNumber: 1 }, market: { status: "unavailable", updatedAt: null, source: "RA-FI Opportunity Engine" } };
 }
-function createAgent(id) { return { id, startingBalanceUsd: ARENA_CONFIG.startingBalanceUsd, cashUsd: ARENA_CONFIG.startingBalanceUsd, accountEquityUsd: ARENA_CONFIG.startingBalanceUsd, positions: {}, wipedOut: false, metrics: { completedTrades: 0, winningTrades: 0, losingTrades: 0, breakEvenTrades: 0, grossProfitUsd: 0, grossLossUsd: 0, realizedNetProfitUsd: 0, unrealizedNetProfitUsd: 0, winRatePercent: 0, successfulTrades: 0, profitableUniqueAssets: [], biggestSingleWinnerPercent: 0, biggestSingleWinnerTradeId: null, wipeouts: 0 }, score: { total: 50, netProfit: 25, winRate: 10, successfulTrades: 7.5, marketIntelligence: 3.75, biggestSingleWinner: 3.75 } }; }
+function createAgent(id) { return { id, startingBalanceUsd: ARENA_CONFIG.startingBalanceUsd, cashUsd: ARENA_CONFIG.startingBalanceUsd, accountEquityUsd: ARENA_CONFIG.startingBalanceUsd, positions: {}, wipedOut: false, activity: defaultActivity(), metrics: { completedTrades: 0, winningTrades: 0, losingTrades: 0, breakEvenTrades: 0, grossProfitUsd: 0, grossLossUsd: 0, realizedNetProfitUsd: 0, unrealizedNetProfitUsd: 0, winRatePercent: 0, successfulTrades: 0, profitableUniqueAssets: [], biggestSingleWinnerPercent: 0, biggestSingleWinnerTradeId: null, wipeouts: 0 }, score: { total: 50, netProfit: 25, winRate: 10, successfulTrades: 7.5, marketIntelligence: 3.75, biggestSingleWinner: 3.75 } }; }
+function defaultActivity(){return {status:"SCANNING MARKET",message:"Awaiting active campaign",selectedProductId:"BTC-USD",decision:null,confidence:0,allocationPercent:null,updatedAt:null,activeOrderId:null,decisionSequenceId:null};}
 
 function assertActive(state) { if (state.campaign.status !== "ACTIVE") throw new ArenaError("CAMPAIGN_NOT_ACTIVE", "The arena campaign is not active.", 409); if (state.round.status !== "ACTIVE") throw new ArenaError("ROUND_NOT_ACTIVE", "The current round is not active.", 409); }
 function validateOrderShape(input) { if (!input || typeof input !== "object") throw new ArenaError("INVALID_AMOUNT", "Order body is required."); if (!ARENA_CONFIG.agents.includes(input.agentId)) throw new ArenaError("INVALID_AGENT", "Supported agents are CODY and ATLAS."); if (!ARENA_CONFIG.supportedProducts.includes(input.productId)) throw new ArenaError("INVALID_PRODUCT", "The requested product is unsupported."); if (!['BUY','SELL'].includes(input.side)) throw new ArenaError("INVALID_SIDE", "Side must be BUY or SELL."); if (typeof input.idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{8,128}$/.test(input.idempotencyKey)) throw new ArenaError("INVALID_IDEMPOTENCY_KEY", "A valid idempotency key is required."); const buyInputs = [input.allocationPercent, input.amountUsd].filter(v => v !== undefined); if (input.side === "BUY" && buyInputs.length !== 1) throw new ArenaError("INVALID_AMOUNT", "BUY requires exactly one allocationPercent or amountUsd."); if (input.side === "SELL" && (input.positionPercent === undefined || input.allocationPercent !== undefined || input.amountUsd !== undefined)) throw new ArenaError("INVALID_AMOUNT", "SELL requires positionPercent only."); }
