@@ -1,6 +1,6 @@
 {
   "name": "rafi-agent-trading-arena",
-  "version": "1.6.1-staging.1",
+  "version": "1.6.2-staging.1",
   "private": true,
   "license": "MIT",
   "type": "module",

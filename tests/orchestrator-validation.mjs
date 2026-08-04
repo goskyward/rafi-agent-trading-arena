@@ -9,5 +9,8 @@ assert.match(source, /campaign\.id.*round\.number.*bucket.*agentId/s, "decision 
 assert.match(source, /activity\.decisionSequenceId===sequenceId/, "duplicate decision cycles must stop before execution");
 assert.match(source, /state\.idempotency\[input\.idempotencyKey\]/, "order execution must retain ledger idempotency");
 assert.match(source, /for\(const agentId of ARENA_CONFIG\.agents\)await this\.runAgentDecision/, "registered agents must share one market cycle");
-assert.doesNotMatch(source, /setAlarm\([^\n]*(getArena|scoreboard|health)/, "read paths must not schedule lifecycle work");
-console.log(JSON.stringify({alarmCadence:"passed",decisionIdempotency:"passed",sharedMarketContext:"passed",readOnlyReads:"passed"},null,2));
+assert.match(source, /async getArena\(\) \{ return this\.buildArenaPayload\(await this\.ensureActiveCampaign\(\)/, "authoritative arena reads must ensure one active campaign");
+assert.match(source, /this\.ctx\.storage\.transaction\(async txn=>/, "campaign initialization must re-read and persist inside a storage transaction");
+assert.match(source, /if\(current\.campaign\.status==="ACTIVE"\)/, "active campaigns must remain unchanged");
+assert.match(source, /async alarm\(\)[\s\S]*ensureActiveCampaign\(\)/, "alarms must provide automatic campaign succession");
+console.log(JSON.stringify({alarmCadence:"passed",decisionIdempotency:"passed",sharedMarketContext:"passed",autoStart:"passed",concurrencyGuard:"passed"},null,2));

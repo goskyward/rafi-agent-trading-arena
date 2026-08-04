@@ -27,7 +27,7 @@ export class ArenaController extends DurableObject {
   }
 
   async health() { return { available: true, objectId: this.ctx.id.toString(), storage: "sqlite" }; }
-  async getArena() { return this.buildArenaPayload(await this.loadAndReconcile(), true); }
+  async getArena() { return this.buildArenaPayload(await this.ensureActiveCampaign(), true); }
   async getScoreboard() { const state = await this.markState(await this.loadAndReconcile(), true); return scoreboardPayload(state); }
   async getAgents() { const state = await this.markState(await this.loadAndReconcile(), true); return { ok: true, serverTime: new Date().toISOString(), agents: publicAgents(state.agents) }; }
   async getPositions() { const state = await this.markState(await this.loadAndReconcile(), true); return { ok: true, serverTime: new Date().toISOString(), positions: Object.fromEntries(ARENA_CONFIG.agents.map(id => [id, Object.values(state.agents[id].positions).map(publicPosition)])) }; }
@@ -41,14 +41,34 @@ export class ArenaController extends DurableObject {
     this.ctx.storage.sql.exec("INSERT OR IGNORE INTO campaign_archives (campaign_id,archived_at,reset_epoch,arena_rules_version,strategy_versions,snapshot) VALUES (?,?,?,?,?,?)",state.campaign.id,iso(Date.now()),resetEpoch,"1.1",JSON.stringify(STRATEGY_VERSIONS),JSON.stringify(snapshot));
   }
 
+  async ensureActiveCampaign() {
+    const now=Date.now(),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"").trim();
+    const result=await this.ctx.storage.transaction(async txn=>{
+      const stored=(await txn.get(STATE_KEY))||createInitialState(),current=reconcileState(stored,now);
+      if(current.campaign.status==="ACTIVE"){
+        if(JSON.stringify(stored.round)!==JSON.stringify(current.round))await txn.put(STATE_KEY,current);
+        return {state:current,created:false};
+      }
+      if(current.campaign.status==="COMPLETED"){
+        const settlements=settleElapsedRounds(current,now);for(const settlement of settlements)this.storeRoundSettlement(settlement);
+        current.campaign.winner=scoreboardPayload(current).leader;
+        this.archiveCompetitiveState(current,`successor:${current.campaign.id}`);
+      }
+      const next=createActiveState(now,resetEpoch||current.competitiveResetEpoch||null);
+      await txn.put(STATE_KEY,next);
+      return {state:next,created:true};
+    });
+    const alarm=await this.ctx.storage.getAlarm();
+    if(result.created||alarm===null)await this.ctx.storage.setAlarm(Date.now()+1000);
+    return result.state;
+  }
+
   async startCampaign() {
     const now = Date.now();
     const state = await this.ctx.storage.transaction(async txn => {
       const current = reconcileState((await txn.get(STATE_KEY)) || createInitialState(), now);
       if (current.campaign.status === "ACTIVE") throw new ArenaError("CAMPAIGN_ALREADY_ACTIVE", "The arena campaign is already active.", 409);
-      const next = createInitialState();
-      next.campaign = { id: `campaign-${crypto.randomUUID()}`, status: "ACTIVE", startedAt: iso(now), endsAt: iso(now + ARENA_CONFIG.campaignDurationSeconds * 1000), completedAt: null, durationSeconds: ARENA_CONFIG.campaignDurationSeconds, maximumRounds: ARENA_CONFIG.maximumRounds };
-      next.round = deriveRound(next.campaign, now); ensureRollingScoring(next,now); await txn.put(STATE_KEY, next); return next;
+      const next=createActiveState(now,String(this.env.COMPETITIVE_RESET_EPOCH||"").trim()||current.competitiveResetEpoch||null);await txn.put(STATE_KEY,next);return next;
     });
     await this.ctx.storage.setAlarm(now + 1000);
     return this.buildArenaPayload(state, false);
@@ -56,15 +76,14 @@ export class ArenaController extends DurableObject {
 
   async resetCampaign(confirmation) {
     if (confirmation !== "RESET_ARENA") throw new ArenaError("INVALID_CONFIRMATION", "Reset requires confirm: RESET_ARENA.");
-    const current=await this.ctx.storage.get(STATE_KEY),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"manual-staging-reset");this.archiveCompetitiveState(current,resetEpoch);const state = createInitialState(); state.competitiveResetEpoch=resetEpoch;state.resetAt = new Date().toISOString(); await this.ctx.storage.put(STATE_KEY, state); await this.ctx.storage.deleteAlarm();
-    return { ok: true, resetAt: state.resetAt, campaign: state.campaign };
+    const resetAt=new Date().toISOString(),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"manual-staging-reset"),current=await this.ctx.storage.get(STATE_KEY);this.archiveCompetitiveState(current,resetEpoch);const state=createActiveState(Date.now(),resetEpoch);state.resetAt=resetAt;await this.ctx.storage.put(STATE_KEY,state);await this.ctx.storage.setAlarm(Date.now()+1000);
+    return this.buildArenaPayload(state,false);
   }
 
   async alarm() {
     const now=Date.now();
     try {
-      let state=await this.loadAndReconcile();
-      if(state.campaign.status!=="ACTIVE")return;
+      let state=await this.ensureActiveCampaign();
       const settlements=settleElapsedRounds(state,now);for(const settlement of settlements)this.storeRoundSettlement(settlement);const halftimeEvents=applyHalftimeReviews(state,now);if(settlements.length||halftimeEvents.length)await this.ctx.storage.put(STATE_KEY,state);
       const provider=new OpportunityEngineMarketProvider(this.env);
       const heldProducts=ARENA_CONFIG.agents.flatMap(id=>Object.keys(state.agents[id].positions));
@@ -201,6 +220,7 @@ export class ArenaController extends DurableObject {
 function createInitialState() {
   return { campaign: { id: null, status: "NOT_STARTED", startedAt: null, endsAt: null, completedAt: null, durationSeconds: ARENA_CONFIG.campaignDurationSeconds, maximumRounds: ARENA_CONFIG.maximumRounds }, round: { number: 0, startedAt: null, endsAt: null, durationSeconds: ARENA_CONFIG.roundDurationSeconds, status: "PENDING", remainingSeconds: ARENA_CONFIG.roundDurationSeconds, progressPercent: 0 }, agents: Object.fromEntries(ARENA_CONFIG.agents.map(id => [id, createAgent(id)])), trades: [], idempotency: {}, sequence: { nextOrderNumber: 1, nextTradeNumber: 1 }, market: { status: "unavailable", updatedAt: null, source: "RA-FI Opportunity Engine" }, opportunity:{activeBoard:null,lastAcceptedAt:null,lastError:null}, candidateUniverse:{activeSnapshot:null,lastAcceptedAt:null} };
 }
+function createActiveState(now,resetEpoch=null){const state=createInitialState();state.competitiveResetEpoch=resetEpoch;state.campaign={id:`campaign-${crypto.randomUUID()}`,status:"ACTIVE",startedAt:iso(now),endsAt:iso(now+ARENA_CONFIG.campaignDurationSeconds*1000),completedAt:null,durationSeconds:ARENA_CONFIG.campaignDurationSeconds,maximumRounds:ARENA_CONFIG.maximumRounds};state.round=deriveRound(state.campaign,now);ensureRollingScoring(state,now);return state;}
 function createAgent(id) { return { id, startingBalanceUsd: ARENA_CONFIG.startingBalanceUsd, cashUsd: ARENA_CONFIG.startingBalanceUsd, accountEquityUsd: ARENA_CONFIG.startingBalanceUsd, positions: {}, wipedOut: false, activity: defaultActivity(), metrics: { completedTrades: 0, winningTrades: 0, losingTrades: 0, breakEvenTrades: 0, grossProfitUsd: 0, grossLossUsd: 0, realizedNetProfitUsd: 0, unrealizedNetProfitUsd: 0, winRatePercent: 0, successfulTrades: 0, profitableUniqueAssets: [], biggestSingleWinnerPercent: 0, biggestSingleWinnerTradeId: null, wipeouts: 0 }, score: { total: 0 } }; }
 function defaultActivity(){return {status:"SCANNING MARKET",message:"Awaiting active campaign",selectedProductId:null,decision:null,confidence:0,allocationPercent:null,updatedAt:null,activeOrderId:null,decisionSequenceId:null};}
 
