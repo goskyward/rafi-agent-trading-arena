@@ -13,9 +13,9 @@ export class CodyStrategy {
     }
     if (uatMode && agent.metrics?.completedTrades > 0) return pass("UAT_LIFECYCLE_COMPLETE", 100);
     const ranked = opportunities.filter(item => assets[item.productId]).sort((a,b) => marketChange(b)-marketChange(a) || b.opportunityScore-a.opportunityScore);
-    const opportunity = ranked[0];
-    if (!opportunity || (!uatMode && marketChange(opportunity) < 0)) return pass("CODY_NO_POSITIVE_MOMENTUM", 55);
-    return { decision:"TRADE", productId:opportunity.productId, selectedOpportunityId:opportunity.opportunityId, allocation:{type:"PERCENT_OF_AVAILABLE_CASH",value:uatMode?1:25}, reasonCode:uatMode?"UAT_CONTROLLED_ENTRY":"CODY_MOMENTUM_ENTRY", confidence:uatMode?100:Math.min(95,65+Math.abs(marketChange(opportunity))*5) };
+    const opportunity = ranked[0],adaptation=agent.halftimeAdaptation?.roundNumber===round.number&&agent.halftimeAdaptation?.active?agent.halftimeAdaptation:null,threshold=adaptation?Math.max(ARENA_CONFIG.vivianConfidenceSafetyFloor,round.remainingSeconds<=60?adaptation.finalMinuteThreshold:adaptation.halftimeThreshold):ARENA_CONFIG.vivianOpeningConfidenceThreshold,confidence=Number(opportunity?.confidence??opportunity?.opportunityScore)||0;
+    if (!opportunity || (!uatMode && (marketChange(opportunity) < 0||confidence<threshold))) return pass(adaptation?"CODY_HALFTIME_THRESHOLD_NOT_MET":"CODY_NO_POSITIVE_MOMENTUM", 55);
+    return { decision:"TRADE", productId:opportunity.productId, selectedOpportunityId:opportunity.opportunityId, allocation:{type:"PERCENT_OF_AVAILABLE_CASH",value:uatMode?1:25}, reasonCode:uatMode?"UAT_CONTROLLED_ENTRY":adaptation?"CODY_EXPANDED_SEARCH_ENTRY":"CODY_MOMENTUM_ENTRY", confidence:uatMode?100:confidence };
   }
 }
 
@@ -30,7 +30,8 @@ export class AtlasStrategy {
     }
     const ranked=opportunities.filter(item=>assets[item.productId]).sort((a,b)=>marketChange(a)-marketChange(b)||b.opportunityScore-a.opportunityScore), opportunity=ranked[0];
     if(!opportunity||marketChange(opportunity)>0)return pass("ATLAS_NO_OVERSOLD_ASSET",58);
-    return {decision:"TRADE",productId:opportunity.productId,selectedOpportunityId:opportunity.opportunityId,allocation:{type:"PERCENT_OF_AVAILABLE_CASH",value:15},reasonCode:"ATLAS_REVERSION_ENTRY",confidence:Math.min(92,62+Math.abs(marketChange(opportunity))*5)};
+    const adaptation=agent.halftimeAdaptation?.roundNumber===round.number&&agent.halftimeAdaptation?.active?agent.halftimeAdaptation:null;
+    return {decision:"TRADE",productId:opportunity.productId,selectedOpportunityId:opportunity.opportunityId,allocation:{type:"PERCENT_OF_AVAILABLE_CASH",value:adaptation?.allocationPercent||ARENA_CONFIG.prestonBaseAllocationPercent},reasonCode:adaptation?"ATLAS_HALFTIME_VALUE_ENTRY":"ATLAS_REVERSION_ENTRY",confidence:Math.min(92,62+Math.abs(marketChange(opportunity))*5)};
   }
 }
 
@@ -46,3 +47,4 @@ export function validateAgentDecision(decision){
 }
 
 function marketChange(opportunity){return Number(opportunity?.upstreamIntelligence?.changePercent)||0;}
+import { ARENA_CONFIG } from "./config.js";

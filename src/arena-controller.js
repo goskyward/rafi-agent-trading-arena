@@ -7,6 +7,7 @@ import { campaignView, deriveRound, reconcileState } from "./clocks.js";
 import { AGENT_REGISTRY, STRATEGY_VERSIONS, validateAgentDecision } from "./strategies.js";
 import { boardAuthorizesBuys, finalizeResolvableBoard, findActiveOpportunity, isExactCoinbaseUsdProduct } from "./opportunity-contract.js";
 import { decorateRound, ensureRollingScoring, publicScoring, recordDecisionScoring, recordTradeScoring, recordWipeoutScoring, settleElapsedRounds } from "./rolling-scoring.js";
+import { applyHalftimeReviews, ensureHalftimeState, publicHalftime } from "./halftime-review.js";
 
 const STATE_KEY = "arena-state-v1";
 const AGENT_CADENCE_MS = 15000;
@@ -53,7 +54,7 @@ export class ArenaController extends DurableObject {
     try {
       let state=await this.loadAndReconcile();
       if(state.campaign.status!=="ACTIVE")return;
-      const settlements=settleElapsedRounds(state,now);for(const settlement of settlements)this.storeRoundSettlement(settlement);if(settlements.length)await this.ctx.storage.put(STATE_KEY,state);
+      const settlements=settleElapsedRounds(state,now);for(const settlement of settlements)this.storeRoundSettlement(settlement);const halftimeEvents=applyHalftimeReviews(state,now);if(settlements.length||halftimeEvents.length)await this.ctx.storage.put(STATE_KEY,state);
       const provider=new OpportunityEngineMarketProvider(this.env);
       const heldProducts=ARENA_CONFIG.agents.flatMap(id=>Object.keys(state.agents[id].positions));
       let accepted,assets;
@@ -182,7 +183,7 @@ export class ArenaController extends DurableObject {
 
   async buildArenaPayload(state, mark) {
     if (mark) state = await this.markState(state, true);
-    return { ok: true, service: SERVICE, version: VERSION, simulation: true, serverTime: new Date().toISOString(), campaign: campaignView(state.campaign), round: decorateRound(state.round), scoreboard: scoreboardPayload(state), scoring: publicScoring(state), agents: publicAgents(state.agents), recentTrades: state.trades.slice(-ARENA_CONFIG.recentTradeLimit).reverse().map(publicTrade), market: state.market, executionModel: executionModel(this.env) };
+    return { ok: true, service: SERVICE, version: VERSION, simulation: true, serverTime: new Date().toISOString(), campaign: campaignView(state.campaign), round: decorateRound(state.round), scoreboard: scoreboardPayload(state), scoring: publicScoring(state), halftime: publicHalftime(state), agents: publicAgents(state.agents), recentTrades: state.trades.slice(-ARENA_CONFIG.recentTradeLimit).reverse().map(publicTrade), market: state.market, executionModel: executionModel(this.env) };
   }
 }
 
@@ -205,7 +206,7 @@ function executeBuy(state, account, input, quote, model, orderId, now) {
   const provenance={opportunityId:input.opportunityId,scanCycleId:input.scanCycleId,boardHash:input.boardHash,decisionId:input.decisionId,strategyVersion:input.strategyVersion,executionModelVersion:model.version};
   const position = existing || { symbol: input.productId, quantity: 0, averageEntryPrice: 0, totalCostBasisUsd: 0, totalEntryFeesUsd: 0, entryAllocationPercent: input.allocationPercent??null, openedAt: iso(now), lastUpdatedAt: iso(now), lastMarkPrice: quote.price, ...provenance };
   position.quantity = roundMoney(oldQty + quantity); position.averageEntryPrice = roundMoney(weightedAverageEntry(oldQty, existing?.averageEntryPrice || 0, quantity, requested)); position.totalCostBasisUsd = roundMoney(position.totalCostBasisUsd + requested + fee); position.totalEntryFeesUsd = roundMoney(position.totalEntryFeesUsd + fee); position.lastUpdatedAt = iso(now); position.lastMarkPrice = quote.price;
-  account.cashUsd = roundMoney(account.cashUsd - debit); account.positions[input.productId] = position; account.accountEquityUsd = roundMoney(account.cashUsd + Object.values(account.positions).reduce((sum, p) => sum + conservativeLiquidationValue(p.lastMarkPrice || p.averageEntryPrice, p.quantity, model), 0)); ensureRollingScoring(state,now);
+  account.cashUsd = roundMoney(account.cashUsd - debit); account.positions[input.productId] = position; account.halftimeAdaptation=null; account.accountEquityUsd = roundMoney(account.cashUsd + Object.values(account.positions).reduce((sum, p) => sum + conservativeLiquidationValue(p.lastMarkPrice || p.averageEntryPrice, p.quantity, model), 0)); ensureRollingScoring(state,now);
   return { ok: true, order: { orderId, status: "FILLED", agentId: account.id, side: "BUY", productId: input.productId, referencePrice: quote.price, fillPrice, grossNotionalUsd: requested, feeUsd: fee, quantity, filledAt: iso(now), quote, executionModel: model, ...provenance }, trade: null, agent: account, scoreboard: scoreboardPayload(state) };
 }
 function executeSell(state, account, input, quote, model, orderId, now) {
