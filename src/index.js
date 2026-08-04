@@ -32,7 +32,7 @@ export default {
       if (request.method === "POST" && ["/arena/start", "/arena/reset", "/arena/order", "/arena/settle"].includes(path)) {
         await requireAdmin(request, env);
         if (path === "/arena/start") return json(await stub.startCampaign(), 200, cors);
-        if (path === "/arena/reset") { const body = await readJson(request); return json(await stub.resetCampaign(body.confirm), 200, cors); }
+        if (path === "/arena/reset") { if(env.ALLOW_COMPETITIVE_RESET!=="true")throw new ArenaError("RESET_DISABLED","Competitive reset is disabled in this environment.",403);const body = await readJson(request); return json(await stub.resetCampaign(body.confirm), 200, cors); }
         if (path === "/arena/order") return json(await stub.submitOrder(await readJson(request), requestId), 200, cors);
         return json(await stub.settle(), 200, cors);
       }

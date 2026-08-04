@@ -20,7 +20,9 @@ export class ArenaController extends DurableObject {
     this.env = env;
     this.ctx.blockConcurrencyWhile(async () => {
       initializeAuditSchema(this.ctx.storage.sql);
-      if (!(await this.ctx.storage.get(STATE_KEY))) await this.ctx.storage.put(STATE_KEY, createInitialState());
+      const stored=await this.ctx.storage.get(STATE_KEY),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"").trim();
+      if(stored&&resetEpoch&&stored.competitiveResetEpoch!==resetEpoch){this.archiveCompetitiveState(stored,resetEpoch);const fresh=createInitialState();fresh.competitiveResetEpoch=resetEpoch;fresh.resetAt=iso(Date.now());await this.ctx.storage.put(STATE_KEY,fresh);await this.ctx.storage.deleteAlarm();}
+      else if(!stored){const fresh=createInitialState();fresh.competitiveResetEpoch=resetEpoch||null;await this.ctx.storage.put(STATE_KEY,fresh);}
     });
   }
 
@@ -30,7 +32,8 @@ export class ArenaController extends DurableObject {
   async getAgents() { const state = await this.markState(await this.loadAndReconcile(), true); return { ok: true, serverTime: new Date().toISOString(), agents: publicAgents(state.agents) }; }
   async getPositions() { const state = await this.markState(await this.loadAndReconcile(), true); return { ok: true, serverTime: new Date().toISOString(), positions: Object.fromEntries(ARENA_CONFIG.agents.map(id => [id, Object.values(state.agents[id].positions).map(publicPosition)])) }; }
   async getTrades() { const state = await this.loadAndReconcile(); return { ok: true, serverTime: new Date().toISOString(), count: state.trades.length, trades: [...state.trades].reverse().map(publicTrade) }; }
-  async getAuditSummary(){const counts={};for(const table of ["opportunity_scans","opportunity_records","agent_decisions","decision_outcomes"]){counts[table]=this.ctx.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).one().count;}const decisions=Object.fromEntries(this.ctx.storage.sql.exec("SELECT decision, COUNT(*) AS count FROM agent_decisions GROUP BY decision").toArray().map(row=>[row.decision,row.count]));return {ok:true,counts,decisions};}
+  async getAuditSummary(){const counts={};for(const table of ["campaign_archives","opportunity_scans","opportunity_records","agent_decisions","decision_outcomes"]){counts[table]=this.ctx.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).one().count;}const decisions=Object.fromEntries(this.ctx.storage.sql.exec("SELECT decision, COUNT(*) AS count FROM agent_decisions GROUP BY decision").toArray().map(row=>[row.decision,row.count]));return {ok:true,counts,decisions};}
+  archiveCompetitiveState(state,resetEpoch){if(!state?.campaign?.id)return;this.ctx.storage.sql.exec("INSERT OR IGNORE INTO campaign_archives (campaign_id,archived_at,reset_epoch,arena_rules_version,strategy_versions,snapshot) VALUES (?,?,?,?,?,?)",state.campaign.id,iso(Date.now()),resetEpoch,"1.1",JSON.stringify(STRATEGY_VERSIONS),JSON.stringify(state));}
 
   async startCampaign() {
     const now = Date.now();
@@ -47,7 +50,7 @@ export class ArenaController extends DurableObject {
 
   async resetCampaign(confirmation) {
     if (confirmation !== "RESET_ARENA") throw new ArenaError("INVALID_CONFIRMATION", "Reset requires confirm: RESET_ARENA.");
-    const state = createInitialState(); state.resetAt = new Date().toISOString(); await this.ctx.storage.put(STATE_KEY, state); await this.ctx.storage.deleteAlarm();
+    const current=await this.ctx.storage.get(STATE_KEY),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"manual-staging-reset");this.archiveCompetitiveState(current,resetEpoch);const state = createInitialState(); state.competitiveResetEpoch=resetEpoch;state.resetAt = new Date().toISOString(); await this.ctx.storage.put(STATE_KEY, state); await this.ctx.storage.deleteAlarm();
     return { ok: true, resetAt: state.resetAt, campaign: state.campaign };
   }
 
@@ -247,6 +250,7 @@ function assertQuoteFresh(quote, maximumAgeSeconds) {
 }
 
 function initializeAuditSchema(sql){
+  sql.exec(`CREATE TABLE IF NOT EXISTS campaign_archives (campaign_id TEXT PRIMARY KEY,archived_at TEXT NOT NULL,reset_epoch TEXT NOT NULL,arena_rules_version TEXT NOT NULL,strategy_versions TEXT NOT NULL,snapshot TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS opportunity_scans (scan_cycle_id TEXT PRIMARY KEY,contract_version TEXT NOT NULL,engine_version TEXT NOT NULL,generated_at TEXT NOT NULL,received_at TEXT NOT NULL,expires_at TEXT NOT NULL,board_status TEXT NOT NULL,board_hash TEXT NOT NULL,source TEXT NOT NULL,evaluated_asset_count INTEGER NOT NULL,qualified_asset_count INTEGER NOT NULL,accepted_opportunity_count INTEGER NOT NULL,rejected_opportunity_count INTEGER NOT NULL,validation_result TEXT NOT NULL,normalized_board_snapshot TEXT NOT NULL,raw_validated_snapshot TEXT NOT NULL,scoring_mode TEXT,scoring_notice TEXT,cache_state TEXT,stale_state INTEGER NOT NULL,rejection_codes TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS opportunity_records (opportunity_id TEXT PRIMARY KEY,scan_cycle_id TEXT NOT NULL,board_hash TEXT NOT NULL,product_id TEXT NOT NULL,venue TEXT NOT NULL,rank INTEGER NOT NULL,opportunity_score REAL NOT NULL,confidence REAL NOT NULL,reference_price REAL NOT NULL,reference_price_observed_at TEXT NOT NULL,generated_at TEXT NOT NULL,expires_at TEXT NOT NULL,intended_horizon_seconds INTEGER,tradability TEXT NOT NULL,market_direction TEXT NOT NULL,signal TEXT,signals TEXT NOT NULL,risk_flags TEXT NOT NULL,qualified INTEGER NOT NULL,engine_version TEXT NOT NULL,raw_accepted_fields TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS agent_decisions (decision_id TEXT PRIMARY KEY,campaign_id TEXT,round_number INTEGER NOT NULL,agent_id TEXT NOT NULL,strategy_version TEXT NOT NULL,scan_cycle_id TEXT NOT NULL,board_hash TEXT NOT NULL,evaluated_opportunity_ids TEXT NOT NULL,selected_opportunity_id TEXT,decision TEXT NOT NULL,allocation TEXT,agent_confidence REAL NOT NULL,reason_code TEXT NOT NULL,reason_detail TEXT,decided_at TEXT NOT NULL,execution_status TEXT NOT NULL,order_id TEXT)`);

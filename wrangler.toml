@@ -42,6 +42,8 @@ class_name = "ArenaController"
 name = "rafi-agent-trading-arena-staging"
 
 [env.staging.vars]
+ALLOW_COMPETITIVE_RESET = "true"
+COMPETITIVE_RESET_EPOCH = "opord-rafi-002-clean-score-v1"
 ARENA_UAT_MODE = "true"
 FEE_RATE_BPS = "40"
 SLIPPAGE_BPS = "5"
@@ -58,6 +60,7 @@ class_name = "ArenaController"
 name = "rafi-agent-trading-arena-production"
 
 [env.production.vars]
+ALLOW_COMPETITIVE_RESET = "false"
 FEE_RATE_BPS = "40"
 SLIPPAGE_BPS = "5"
 SYNTHETIC_SPREAD_BPS = "4"
