@@ -43,6 +43,8 @@ export class ArenaController extends DurableObject {
 
   async ensureActiveCampaign() {
     const now=Date.now(),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"").trim();
+    const observed=reconcileState((await this.ctx.storage.get(STATE_KEY))||createInitialState(),now);
+    if(observed.campaign.status==="ACTIVE")return observed;
     const result=await this.ctx.storage.transaction(async txn=>{
       const stored=(await txn.get(STATE_KEY))||createInitialState(),current=reconcileState(stored,now);
       if(current.campaign.status==="ACTIVE"){
@@ -57,8 +59,7 @@ export class ArenaController extends DurableObject {
       await txn.put(STATE_KEY,next);
       return {state:next,created:true};
     });
-    const alarm=await this.ctx.storage.getAlarm();
-    if(result.created||alarm===null)await this.ctx.storage.setAlarm(Date.now()+1000);
+    if(result.created)await this.ctx.storage.setAlarm(Date.now()+1000);
     return result.state;
   }
 
