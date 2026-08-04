@@ -19,8 +19,22 @@ export class OpportunityEngineMarketProvider {
     return { raw, ...(await validateOpportunityBoard(raw)) };
   }
 
+  async getMovers() {
+    const payload = await this.fetchJson("/movers", 7000, ARENA_CONFIG.opportunityPayloadMaximumBytes);
+    if (!Array.isArray(payload.assets)) throw new ArenaError("INVALID_MOVERS", "Movers payload has no asset collection.", 502);
+    return payload;
+  }
+
   async getMarketContext(board, heldProducts = []) {
     const productIds = [...new Set([...(board?.opportunities || []).map(item => item.productId), ...heldProducts])];
+    const settled = await Promise.allSettled(productIds.map(productId => this.getMarketQuote(productId)));
+    const assets = {};
+    settled.forEach((result, index) => { if (result.status === "fulfilled") assets[productIds[index]] = result.value; });
+    return assets;
+  }
+
+  async getCandidateMarketContext(board, movers, heldProducts = []) {
+    const productIds = [...new Set([...(board?.opportunities || []).map(item => item.productId), ...(movers?.assets || []).map(item => item.productId), ...ARENA_CONFIG.coreAssets, ...heldProducts])].filter(isExactCoinbaseUsdProduct);
     const settled = await Promise.allSettled(productIds.map(productId => this.getMarketQuote(productId)));
     const assets = {};
     settled.forEach((result, index) => { if (result.status === "fulfilled") assets[productIds[index]] = result.value; });

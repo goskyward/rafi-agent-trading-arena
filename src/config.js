@@ -1,5 +1,5 @@
 export const SERVICE = "RA-FI Agent Trading Arena";
-export const VERSION = "1.4.0-staging.1";
+export const VERSION = "1.5.0-staging.1";
 export const SCORING_VERSION = "rolling-mission-bonus-v2";
 export const ROLLING_SCORING_VERSION = "rolling-mission-bonus-v2";
 export const EXECUTION_MODEL_VERSION = "1.0.0";
@@ -28,7 +28,10 @@ export const ARENA_CONFIG = Object.freeze({
   vivianConfidenceSafetyFloor: 74,
   prestonBaseAllocationPercent: 15,
   prestonHalftimeAllocationPercent: 18,
-  recentTradeLimit: 100
+  recentTradeLimit: 100,
+  maximumOpenPositions: 3,
+  moverFreshnessMs: 120000,
+  coreAssets: ["BTC-USD", "ETH-USD", "XRP-USD", "SOL-USD"]
 });
 
 export function executionModel(env = {}) {
