@@ -50,7 +50,7 @@ FEE_RATE_BPS = "40"
 SLIPPAGE_BPS = "5"
 SYNTHETIC_SPREAD_BPS = "4"
 MAX_QUOTE_AGE_SECONDS = "90"
-CORS_ALLOWED_ORIGINS = "https://uat.ra-fi.com,https://rafi-arena-commander-uat.pages.dev,https://dynamic-opportunity-uat.rafi-arena-commander-uat.pages.dev"
+CORS_ALLOWED_ORIGINS = "https://uat.ra-fi.com,https://ra-fi8-0.d25mb8wqnc3c0d.amplifyapp.com,https://ra-fi.com,https://www.ra-fi.com"
 OPPORTUNITY_ENGINE_BASE_URL = "https://rafi-crypto-movers-staging.camronra2020.workers.dev"
 
 [[env.staging.durable_objects.bindings]]
