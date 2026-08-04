@@ -1,12 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { ARENA_CONFIG, SERVICE, VERSION, executionModel, maximumQuoteAgeSeconds } from "./config.js";
 import { OpportunityEngineMarketProvider } from "./market-provider.js";
-import { calculateScores } from "./scoring.js";
 import { calculateBuyExecution, calculateSellExecution, classifyTrade, conservativeLiquidationValue, weightedAverageEntry } from "./execution-math.js";
 import { ArenaError, finite, iso, roundMoney } from "./utils.js";
 import { campaignView, deriveRound, reconcileState } from "./clocks.js";
 import { AGENT_REGISTRY, STRATEGY_VERSIONS, validateAgentDecision } from "./strategies.js";
 import { boardAuthorizesBuys, finalizeResolvableBoard, findActiveOpportunity, isExactCoinbaseUsdProduct } from "./opportunity-contract.js";
+import { decorateRound, ensureRollingScoring, publicScoring, recordDecisionScoring, recordTradeScoring, recordWipeoutScoring, settleElapsedRounds } from "./rolling-scoring.js";
 
 const STATE_KEY = "arena-state-v1";
 const AGENT_CADENCE_MS = 15000;
@@ -36,7 +36,7 @@ export class ArenaController extends DurableObject {
       if (current.campaign.status === "ACTIVE") throw new ArenaError("CAMPAIGN_ALREADY_ACTIVE", "The arena campaign is already active.", 409);
       const next = createInitialState();
       next.campaign = { id: `campaign-${crypto.randomUUID()}`, status: "ACTIVE", startedAt: iso(now), endsAt: iso(now + ARENA_CONFIG.campaignDurationSeconds * 1000), completedAt: null, durationSeconds: ARENA_CONFIG.campaignDurationSeconds, maximumRounds: ARENA_CONFIG.maximumRounds };
-      next.round = deriveRound(next.campaign, now); await txn.put(STATE_KEY, next); return next;
+      next.round = deriveRound(next.campaign, now); ensureRollingScoring(next,now); await txn.put(STATE_KEY, next); return next;
     });
     await this.ctx.storage.setAlarm(now + 1000);
     return this.buildArenaPayload(state, false);
@@ -53,6 +53,7 @@ export class ArenaController extends DurableObject {
     try {
       let state=await this.loadAndReconcile();
       if(state.campaign.status!=="ACTIVE")return;
+      const settlements=settleElapsedRounds(state,now);for(const settlement of settlements)this.storeRoundSettlement(settlement);if(settlements.length)await this.ctx.storage.put(STATE_KEY,state);
       const provider=new OpportunityEngineMarketProvider(this.env);
       const heldProducts=ARENA_CONFIG.agents.flatMap(id=>Object.keys(state.agents[id].positions));
       let accepted,assets;
@@ -69,7 +70,7 @@ export class ArenaController extends DurableObject {
     }
   }
 
-  async settle() { const state = await this.markState(await this.loadAndReconcile(), true); return this.buildArenaPayload(state, false); }
+  async settle() { const state = await this.loadAndReconcile(),settlements=settleElapsedRounds(state,Date.now());for(const settlement of settlements)this.storeRoundSettlement(settlement);await this.ctx.storage.put(STATE_KEY,state);return this.buildArenaPayload(await this.markState(state,true), false); }
 
   async submitOrder(input, requestId) {
     validateOrderShape(input);
@@ -136,6 +137,7 @@ export class ArenaController extends DurableObject {
     const decisionId=`decision-${crypto.randomUUID()}`,record={decisionId,campaignId:state.campaign.id,roundNumber:state.round.number,agentId,strategyVersion:STRATEGY_VERSIONS[agentId],scanCycleId:board.scanCycleId,boardHash:board.boardHash,evaluatedOpportunityIds:evaluated,selectedOpportunityId:decision.selectedOpportunityId,decision:decision.decision,allocation:decision.allocation,agentConfidence:decision.confidence,reasonCode:decision.reasonCode,reasonDetail:null,decidedAt:iso(now),executionStatus:"NOT_REQUESTED",orderId:null};
     this.storeDecision(record);
     activity.decisionSequenceId=sequenceId;activity.decision={decision:decision.decision,productId:decision.productId};activity.confidence=decision.confidence;activity.allocationPercent=decision.allocation?.value??null;activity.selectedProductId=decision.productId;activity.updatedAt=iso(now);activity.message=decision.reasonCode;
+    recordDecisionScoring(state,agentId,decision,board,now);
     if(["PASS","MANAGE_POSITION"].includes(decision.decision)){this.storeNoExecutionOutcome(record);activity.status=decision.decision==="MANAGE_POSITION"?"MONITORING POSITION":"SCANNING MARKET";state.agents[agentId].activity=activity;await this.ctx.storage.put(STATE_KEY,state);return;}
     activity.status=decision.decision==="TRADE"?"PREPARING ORDER":"EXECUTING SELL";state.agents[agentId].activity=activity;await this.ctx.storage.put(STATE_KEY,state);
     const asset=assets[decision.productId];if(!asset){this.updateDecisionExecution(decisionId,"QUOTE_UNAVAILABLE",null);return;}
@@ -148,6 +150,7 @@ export class ArenaController extends DurableObject {
   storePendingOutcome(order,input){this.ctx.storage.sql.exec(`INSERT OR REPLACE INTO decision_outcomes (decision_id,opportunity_id,order_id,trade_id,entry_timestamp,entry_quote,quantity,gross_entry,fees,spread,slippage,classification,execution_model_version,close_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,input.decisionId,input.opportunityId,order.orderId,null,order.filledAt,order.fillPrice,order.quantity,order.grossNotionalUsd,order.feeUsd,executionModel(this.env).syntheticSpreadBps,executionModel(this.env).slippageBps,"N_A",executionModel(this.env).version,"POSITION_OPEN");}
   storeNoExecutionOutcome(record){this.ctx.storage.sql.exec(`INSERT OR REPLACE INTO decision_outcomes (decision_id,opportunity_id,classification,execution_model_version,close_reason) VALUES (?,?,?,?,?)`,record.decisionId,record.selectedOpportunityId,"N_A",executionModel(this.env).version,record.decision);}
   storeOutcome(trade){this.ctx.storage.sql.exec(`INSERT OR REPLACE INTO decision_outcomes (decision_id,opportunity_id,order_id,trade_id,entry_timestamp,exit_timestamp,entry_quote,exit_quote,quantity,gross_entry,gross_exit,fees,spread,slippage,realized_net_pnl,realized_return,holding_duration_seconds,classification,execution_model_version,close_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,trade.decisionId,trade.opportunityId,trade.orderId,trade.tradeId,trade.openedAt,trade.closedAt,trade.entryPrice,trade.exitPrice,trade.quantity,trade.entryNotionalUsd,trade.exitNotionalUsd,trade.totalFeesUsd,executionModel(this.env).syntheticSpreadBps,executionModel(this.env).slippageBps,trade.realizedNetProfitUsd,trade.realizedNetReturnPercent,trade.holdingSeconds,trade.classification,trade.executionModelVersion,"AGENT_SELL");}
+  storeRoundSettlement(settlement){this.ctx.storage.sql.exec("INSERT OR IGNORE INTO round_scoring_settlements (settlement_id,campaign_id,round_number,round_type,settled_at,rules_version,payload) VALUES (?,?,?,?,?,?,?)",settlement.settlementId,settlement.campaignId,settlement.roundNumber,settlement.roundType,settlement.settledAt,settlement.rulesVersion,JSON.stringify(settlement));}
 
   async recordOrchestratorFailure(error,now){const state=await this.loadAndReconcile(),detail=error instanceof Error?error.message:"Unknown market-context error";state.market={...(state.market||{}),status:"degraded",errorCode:error?.code||"MARKET_CONTEXT_ERROR"};for(const id of ARENA_CONFIG.agents){const activity=state.agents[id].activity||defaultActivity();activity.status=Object.keys(state.agents[id].positions).length?"MONITORING POSITION":"SCANNING MARKET";activity.message=`Market intelligence unavailable: ${detail}`;activity.updatedAt=new Date(now).toISOString();state.agents[id].activity=activity;}await this.ctx.storage.put(STATE_KEY,state);}
 
@@ -158,6 +161,7 @@ export class ArenaController extends DurableObject {
   }
 
   async markState(state, persist = false) {
+    ensureRollingScoring(state,Date.now());
     const provider = new OpportunityEngineMarketProvider(this.env), model = executionModel(this.env), symbols = [...new Set(ARENA_CONFIG.agents.flatMap(id => Object.keys(state.agents[id].positions)))];
     let degraded = false, newest = null;
     const quotes = new Map();
@@ -170,22 +174,22 @@ export class ArenaController extends DurableObject {
         const value = conservativeLiquidationValue(price, position.quantity, model); positionValue += value; unrealized += value - position.totalCostBasisUsd;
       }
       account.metrics.unrealizedNetProfitUsd = roundMoney(unrealized); account.accountEquityUsd = roundMoney(account.cashUsd + positionValue);
-      if (account.accountEquityUsd <= ARENA_CONFIG.wipeoutThresholdUsd && !account.wipedOut) { account.wipedOut = true; account.metrics.wipeouts++; }
+      if (account.accountEquityUsd <= ARENA_CONFIG.wipeoutThresholdUsd && !account.wipedOut) { account.wipedOut = true; account.metrics.wipeouts++; recordWipeoutScoring(state,id,Date.now()); }
     }
-    calculateScores(state.agents); state.market = { ...state.market, status: degraded ? "degraded" : "live", updatedAt: newest||state.market?.updatedAt||null, source: "RA-FI Opportunity Engine" };
+    state.market = { ...state.market, status: degraded ? "degraded" : "live", updatedAt: newest||state.market?.updatedAt||null, source: "RA-FI Opportunity Engine" };
     if (persist) await this.ctx.storage.put(STATE_KEY, state); return state;
   }
 
   async buildArenaPayload(state, mark) {
     if (mark) state = await this.markState(state, true);
-    return { ok: true, service: SERVICE, version: VERSION, simulation: true, serverTime: new Date().toISOString(), campaign: campaignView(state.campaign), round: state.round, scoreboard: scoreboardPayload(state), agents: publicAgents(state.agents), recentTrades: state.trades.slice(-ARENA_CONFIG.recentTradeLimit).reverse().map(publicTrade), market: state.market, executionModel: executionModel(this.env) };
+    return { ok: true, service: SERVICE, version: VERSION, simulation: true, serverTime: new Date().toISOString(), campaign: campaignView(state.campaign), round: decorateRound(state.round), scoreboard: scoreboardPayload(state), scoring: publicScoring(state), agents: publicAgents(state.agents), recentTrades: state.trades.slice(-ARENA_CONFIG.recentTradeLimit).reverse().map(publicTrade), market: state.market, executionModel: executionModel(this.env) };
   }
 }
 
 function createInitialState() {
   return { campaign: { id: null, status: "NOT_STARTED", startedAt: null, endsAt: null, completedAt: null, durationSeconds: ARENA_CONFIG.campaignDurationSeconds, maximumRounds: ARENA_CONFIG.maximumRounds }, round: { number: 0, startedAt: null, endsAt: null, durationSeconds: ARENA_CONFIG.roundDurationSeconds, status: "PENDING", remainingSeconds: ARENA_CONFIG.roundDurationSeconds, progressPercent: 0 }, agents: Object.fromEntries(ARENA_CONFIG.agents.map(id => [id, createAgent(id)])), trades: [], idempotency: {}, sequence: { nextOrderNumber: 1, nextTradeNumber: 1 }, market: { status: "unavailable", updatedAt: null, source: "RA-FI Opportunity Engine" }, opportunity:{activeBoard:null,lastAcceptedAt:null,lastError:null} };
 }
-function createAgent(id) { return { id, startingBalanceUsd: ARENA_CONFIG.startingBalanceUsd, cashUsd: ARENA_CONFIG.startingBalanceUsd, accountEquityUsd: ARENA_CONFIG.startingBalanceUsd, positions: {}, wipedOut: false, activity: defaultActivity(), metrics: { completedTrades: 0, winningTrades: 0, losingTrades: 0, breakEvenTrades: 0, grossProfitUsd: 0, grossLossUsd: 0, realizedNetProfitUsd: 0, unrealizedNetProfitUsd: 0, winRatePercent: 0, successfulTrades: 0, profitableUniqueAssets: [], biggestSingleWinnerPercent: 0, biggestSingleWinnerTradeId: null, wipeouts: 0 }, score: { total: 50, netProfit: 25, winRate: 10, successfulTrades: 7.5, marketIntelligence: 3.75, biggestSingleWinner: 3.75 } }; }
+function createAgent(id) { return { id, startingBalanceUsd: ARENA_CONFIG.startingBalanceUsd, cashUsd: ARENA_CONFIG.startingBalanceUsd, accountEquityUsd: ARENA_CONFIG.startingBalanceUsd, positions: {}, wipedOut: false, activity: defaultActivity(), metrics: { completedTrades: 0, winningTrades: 0, losingTrades: 0, breakEvenTrades: 0, grossProfitUsd: 0, grossLossUsd: 0, realizedNetProfitUsd: 0, unrealizedNetProfitUsd: 0, winRatePercent: 0, successfulTrades: 0, profitableUniqueAssets: [], biggestSingleWinnerPercent: 0, biggestSingleWinnerTradeId: null, wipeouts: 0 }, score: { total: 0 } }; }
 function defaultActivity(){return {status:"SCANNING MARKET",message:"Awaiting active campaign",selectedProductId:null,decision:null,confidence:0,allocationPercent:null,updatedAt:null,activeOrderId:null,decisionSequenceId:null};}
 
 function assertActive(state) { if (state.campaign.status !== "ACTIVE") throw new ArenaError("CAMPAIGN_NOT_ACTIVE", "The arena campaign is not active.", 409); if (state.round.status !== "ACTIVE") throw new ArenaError("ROUND_NOT_ACTIVE", "The current round is not active.", 409); }
@@ -199,9 +203,9 @@ function executeBuy(state, account, input, quote, model, orderId, now) {
   if (debit > account.cashUsd + 1e-8) throw new ArenaError("INSUFFICIENT_CASH", `${account.id} does not have enough available cash for this order.`, 409);
   const existing = account.positions[input.productId], oldQty = existing?.quantity || 0;
   const provenance={opportunityId:input.opportunityId,scanCycleId:input.scanCycleId,boardHash:input.boardHash,decisionId:input.decisionId,strategyVersion:input.strategyVersion,executionModelVersion:model.version};
-  const position = existing || { symbol: input.productId, quantity: 0, averageEntryPrice: 0, totalCostBasisUsd: 0, totalEntryFeesUsd: 0, openedAt: iso(now), lastUpdatedAt: iso(now), lastMarkPrice: quote.price, ...provenance };
+  const position = existing || { symbol: input.productId, quantity: 0, averageEntryPrice: 0, totalCostBasisUsd: 0, totalEntryFeesUsd: 0, entryAllocationPercent: input.allocationPercent??null, openedAt: iso(now), lastUpdatedAt: iso(now), lastMarkPrice: quote.price, ...provenance };
   position.quantity = roundMoney(oldQty + quantity); position.averageEntryPrice = roundMoney(weightedAverageEntry(oldQty, existing?.averageEntryPrice || 0, quantity, requested)); position.totalCostBasisUsd = roundMoney(position.totalCostBasisUsd + requested + fee); position.totalEntryFeesUsd = roundMoney(position.totalEntryFeesUsd + fee); position.lastUpdatedAt = iso(now); position.lastMarkPrice = quote.price;
-  account.cashUsd = roundMoney(account.cashUsd - debit); account.positions[input.productId] = position; account.accountEquityUsd = roundMoney(account.cashUsd + Object.values(account.positions).reduce((sum, p) => sum + conservativeLiquidationValue(p.lastMarkPrice || p.averageEntryPrice, p.quantity, model), 0)); calculateScores(state.agents);
+  account.cashUsd = roundMoney(account.cashUsd - debit); account.positions[input.productId] = position; account.accountEquityUsd = roundMoney(account.cashUsd + Object.values(account.positions).reduce((sum, p) => sum + conservativeLiquidationValue(p.lastMarkPrice || p.averageEntryPrice, p.quantity, model), 0)); ensureRollingScoring(state,now);
   return { ok: true, order: { orderId, status: "FILLED", agentId: account.id, side: "BUY", productId: input.productId, referencePrice: quote.price, fillPrice, grossNotionalUsd: requested, feeUsd: fee, quantity, filledAt: iso(now), quote, executionModel: model, ...provenance }, trade: null, agent: account, scoreboard: scoreboardPayload(state) };
 }
 function executeSell(state, account, input, quote, model, orderId, now) {
@@ -211,16 +215,16 @@ function executeSell(state, account, input, quote, model, orderId, now) {
   const quantity = position.quantity * percent / 100;
   if (quantity > position.quantity + 1e-12) throw new ArenaError("INSUFFICIENT_POSITION", `${account.id} cannot sell more than the current position.`, 409);
   const execution = calculateSellExecution(quote.price, quantity, model), { fillPrice, grossProceedsUsd: gross, feeUsd: fee, netProceedsUsd: net } = execution, ratio = quantity / position.quantity, allocatedCost = position.totalCostBasisUsd * ratio, entryFees = position.totalEntryFeesUsd * ratio, entryNotional = allocatedCost - entryFees, realized = net - allocatedCost, returnPercent = allocatedCost > 0 ? realized / allocatedCost * 100 : 0;
-  const tradeId = `trade-${String(state.sequence.nextTradeNumber++).padStart(8, "0")}`, classification = classifyTrade(realized);
+  const tradeId = `trade-${String(state.sequence.nextTradeNumber++).padStart(8, "0")}`, classification = classifyTrade(realized,returnPercent);
   const provenance={opportunityId:position.opportunityId,scanCycleId:position.scanCycleId,boardHash:position.boardHash,decisionId:position.decisionId,closeDecisionId:input.decisionId||null,strategyVersion:position.strategyVersion,executionModelVersion:model.version};
-  const trade = { tradeId, orderId, campaignId: state.campaign.id, roundNumber: state.round.number, agentId: account.id, productId: input.productId, entryPrice: entryNotional / quantity, exitPrice: fillPrice, quantity, entryNotionalUsd: entryNotional, exitNotionalUsd: gross, entryFeesUsd: entryFees, exitFeesUsd: fee, totalFeesUsd: entryFees + fee, realizedNetProfitUsd: realized, realizedNetReturnPercent: returnPercent, openedAt: position.openedAt, closedAt: iso(now), holdingSeconds: Math.max(0, Math.floor((now - Date.parse(position.openedAt)) / 1000)), classification, quoteSource: quote.source, ...provenance };
+  const trade = { tradeId, orderId, campaignId: state.campaign.id, roundNumber: state.round.number, agentId: account.id, productId: input.productId, entryPrice: entryNotional / quantity, exitPrice: fillPrice, quantity, entryNotionalUsd: entryNotional, exitNotionalUsd: gross, entryFeesUsd: entryFees, exitFeesUsd: fee, totalFeesUsd: entryFees + fee, entryAllocationPercent: position.entryAllocationPercent??null, realizedNetProfitUsd: realized, realizedNetReturnPercent: returnPercent, openedAt: position.openedAt, closedAt: iso(now), holdingSeconds: Math.max(0, Math.floor((now - Date.parse(position.openedAt)) / 1000)), classification, quoteSource: quote.source, ...provenance };
   account.cashUsd = roundMoney(account.cashUsd + net); position.quantity = roundMoney(position.quantity - quantity); position.totalCostBasisUsd = roundMoney(position.totalCostBasisUsd - allocatedCost); position.totalEntryFeesUsd = roundMoney(position.totalEntryFeesUsd - entryFees); position.lastUpdatedAt = iso(now); position.lastMarkPrice = quote.price;
   if (position.quantity <= 1e-10) delete account.positions[input.productId];
-  updateMetrics(account.metrics, trade); state.trades.push(trade); account.accountEquityUsd = roundMoney(account.cashUsd + Object.values(account.positions).reduce((sum, p) => sum + conservativeLiquidationValue(p.lastMarkPrice || p.averageEntryPrice, p.quantity, model), 0)); calculateScores(state.agents);
+  updateMetrics(account.metrics, trade); state.trades.push(trade); account.accountEquityUsd = roundMoney(account.cashUsd + Object.values(account.positions).reduce((sum, p) => sum + conservativeLiquidationValue(p.lastMarkPrice || p.averageEntryPrice, p.quantity, model), 0)); recordTradeScoring(state,trade,now);
   return { ok: true, order: { orderId, status: "FILLED", agentId: account.id, side: "SELL", productId: input.productId, referencePrice: quote.price, fillPrice, grossNotionalUsd: gross, feeUsd: fee, quantity, filledAt: iso(now), quote, executionModel: model, ...provenance }, trade, agent: account, scoreboard: scoreboardPayload(state) };
 }
 function updateMetrics(metrics, trade) { metrics.completedTrades++; if (trade.classification === "WIN") { metrics.winningTrades++; metrics.grossProfitUsd = roundMoney(metrics.grossProfitUsd + trade.realizedNetProfitUsd); if (!metrics.profitableUniqueAssets.includes(trade.productId)) metrics.profitableUniqueAssets.push(trade.productId); if (trade.realizedNetReturnPercent > metrics.biggestSingleWinnerPercent) { metrics.biggestSingleWinnerPercent = trade.realizedNetReturnPercent; metrics.biggestSingleWinnerTradeId = trade.tradeId; } } else if (trade.classification === "LOSS") { metrics.losingTrades++; metrics.grossLossUsd = roundMoney(metrics.grossLossUsd + Math.abs(trade.realizedNetProfitUsd)); } else metrics.breakEvenTrades++; metrics.successfulTrades = metrics.winningTrades + metrics.breakEvenTrades; metrics.realizedNetProfitUsd = roundMoney(metrics.grossProfitUsd - metrics.grossLossUsd); metrics.winRatePercent = metrics.completedTrades ? metrics.winningTrades / metrics.completedTrades * 100 : 0; }
-function scoreboardPayload(state) { calculateScores(state.agents); const point = value => Math.round(value * 10) / 10, agents = Object.fromEntries(ARENA_CONFIG.agents.map(id => { const a = state.agents[id], m = a.metrics; return [id, { totalPoints: point(a.score.total), balanceUsd: a.accountEquityUsd, trades: m.completedTrades, profitsUsd: m.grossProfitUsd, lossesUsd: m.grossLossUsd, wipeouts: m.wipeouts, categories: { netProfit: point(a.score.netProfit), winRate: point(a.score.winRate), successfulTrades: point(a.score.successfulTrades), marketIntelligence: point(a.score.marketIntelligence), biggestSingleWinner: point(a.score.biggestSingleWinner) } }]; })); return { ok: true, serverTime: new Date().toISOString(), scoringVersion: "1.0.0", maximumPoints: 100, agents, leader: state.agents.CODY.score.total === state.agents.ATLAS.score.total ? "TIE" : state.agents.CODY.score.total > state.agents.ATLAS.score.total ? "CODY" : "ATLAS" }; }
+function scoreboardPayload(state) { ensureRollingScoring(state);const agents=Object.fromEntries(ARENA_CONFIG.agents.map(id=>{const a=state.agents[id],m=a.metrics;return [id,{totalPoints:Math.round(a.score.total),balanceUsd:a.accountEquityUsd,trades:m.completedTrades,profitsUsd:m.grossProfitUsd,lossesUsd:m.grossLossUsd,wipeouts:m.wipeouts}];}));return {ok:true,serverTime:new Date().toISOString(),scoringVersion:state.scoring.rulesVersion,agents,leader:state.agents.CODY.score.total===state.agents.ATLAS.score.total?"TIE":state.agents.CODY.score.total>state.agents.ATLAS.score.total?"CODY":"ATLAS"};}
 
 function orderFingerprint(input) {
   return JSON.stringify({ agentId: input.agentId, side: input.side, productId: input.productId, allocationPercent: input.allocationPercent ?? null, amountUsd: input.amountUsd ?? null, positionPercent: input.positionPercent ?? null });
@@ -244,6 +248,7 @@ function initializeAuditSchema(sql){
   sql.exec(`CREATE TABLE IF NOT EXISTS opportunity_records (opportunity_id TEXT PRIMARY KEY,scan_cycle_id TEXT NOT NULL,board_hash TEXT NOT NULL,product_id TEXT NOT NULL,venue TEXT NOT NULL,rank INTEGER NOT NULL,opportunity_score REAL NOT NULL,confidence REAL NOT NULL,reference_price REAL NOT NULL,reference_price_observed_at TEXT NOT NULL,generated_at TEXT NOT NULL,expires_at TEXT NOT NULL,intended_horizon_seconds INTEGER,tradability TEXT NOT NULL,market_direction TEXT NOT NULL,signal TEXT,signals TEXT NOT NULL,risk_flags TEXT NOT NULL,qualified INTEGER NOT NULL,engine_version TEXT NOT NULL,raw_accepted_fields TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS agent_decisions (decision_id TEXT PRIMARY KEY,campaign_id TEXT,round_number INTEGER NOT NULL,agent_id TEXT NOT NULL,strategy_version TEXT NOT NULL,scan_cycle_id TEXT NOT NULL,board_hash TEXT NOT NULL,evaluated_opportunity_ids TEXT NOT NULL,selected_opportunity_id TEXT,decision TEXT NOT NULL,allocation TEXT,agent_confidence REAL NOT NULL,reason_code TEXT NOT NULL,reason_detail TEXT,decided_at TEXT NOT NULL,execution_status TEXT NOT NULL,order_id TEXT)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS decision_outcomes (decision_id TEXT PRIMARY KEY,opportunity_id TEXT,order_id TEXT,trade_id TEXT,entry_timestamp TEXT,exit_timestamp TEXT,entry_quote REAL,exit_quote REAL,quantity REAL,gross_entry REAL,gross_exit REAL,fees REAL,spread REAL,slippage REAL,realized_net_pnl REAL,realized_return REAL,holding_duration_seconds INTEGER,classification TEXT NOT NULL,execution_model_version TEXT NOT NULL,close_reason TEXT)`);
+  sql.exec(`CREATE TABLE IF NOT EXISTS round_scoring_settlements (settlement_id TEXT PRIMARY KEY,campaign_id TEXT NOT NULL,round_number INTEGER NOT NULL,round_type TEXT NOT NULL,settled_at TEXT NOT NULL,rules_version TEXT NOT NULL,payload TEXT NOT NULL)`);
   sql.exec("CREATE INDEX IF NOT EXISTS idx_opportunity_records_scan ON opportunity_records(scan_cycle_id)");
   sql.exec("CREATE INDEX IF NOT EXISTS idx_agent_decisions_campaign ON agent_decisions(campaign_id, decided_at)");
 }

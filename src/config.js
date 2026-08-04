@@ -1,6 +1,7 @@
 export const SERVICE = "RA-FI Agent Trading Arena";
-export const VERSION = "1.1.0-staging.1";
-export const SCORING_VERSION = "1.0.0";
+export const VERSION = "1.2.0-staging.1";
+export const SCORING_VERSION = "rolling-round-scoring-v1";
+export const ROLLING_SCORING_VERSION = "rolling-round-scoring-v1";
 export const EXECUTION_MODEL_VERSION = "1.0.0";
 export const ARENA_CONFIG = Object.freeze({
   campaignDurationSeconds: 86400,
@@ -19,6 +20,8 @@ export const ARENA_CONFIG = Object.freeze({
   quoteFreshnessSeconds: 90,
   wipeoutThresholdUsd: 0.01,
   breakEvenToleranceUsd: 0.01,
+  breakEvenReturnTolerancePercent: 0.05,
+  scoringMinimumAllocationPercent: 2,
   recentTradeLimit: 100
 });
 
