@@ -1,7 +1,7 @@
 export const SERVICE = "RA-FI Agent Trading Arena";
-export const VERSION = "1.2.0-staging.1";
-export const SCORING_VERSION = "rolling-round-scoring-v1";
-export const ROLLING_SCORING_VERSION = "rolling-round-scoring-v1";
+export const VERSION = "1.3.0-staging.1";
+export const SCORING_VERSION = "rolling-mission-bonus-v2";
+export const ROLLING_SCORING_VERSION = "rolling-mission-bonus-v2";
 export const EXECUTION_MODEL_VERSION = "1.0.0";
 export const ARENA_CONFIG = Object.freeze({
   campaignDurationSeconds: 86400,
