@@ -27,11 +27,11 @@ export class ArenaController extends DurableObject {
   }
 
   async health() { return { available: true, objectId: this.ctx.id.toString(), storage: "sqlite" }; }
-  async getArena() { return this.buildArenaPayload(await this.ensureActiveCampaign(), true); }
-  async getScoreboard() { const state = await this.markState(await this.loadAndReconcile(), true); return scoreboardPayload(state); }
-  async getAgents() { const state = await this.markState(await this.loadAndReconcile(), true); return { ok: true, serverTime: new Date().toISOString(), agents: publicAgents(state.agents) }; }
-  async getPositions() { const state = await this.markState(await this.loadAndReconcile(), true); return { ok: true, serverTime: new Date().toISOString(), positions: Object.fromEntries(ARENA_CONFIG.agents.map(id => [id, Object.values(state.agents[id].positions).map(publicPosition)])) }; }
-  async getTrades() { const state = await this.loadAndReconcile(); return { ok: true, serverTime: new Date().toISOString(), count: state.trades.length, trades: [...state.trades].reverse().map(publicTrade) }; }
+  async getArena() { const state=await this.markState(await this.ensureActiveCampaign(),false);return this.buildArenaPayload(state,false); }
+  async getScoreboard() { const state = await this.markState(await this.loadAndReconcile(false), false); return scoreboardPayload(state); }
+  async getAgents() { const state = await this.markState(await this.loadAndReconcile(false), false); return { ok: true, serverTime: new Date().toISOString(), agents: publicAgents(state.agents) }; }
+  async getPositions() { const state = await this.markState(await this.loadAndReconcile(false), false); return { ok: true, serverTime: new Date().toISOString(), positions: Object.fromEntries(ARENA_CONFIG.agents.map(id => [id, Object.values(state.agents[id].positions).map(publicPosition)])) }; }
+  async getTrades() { const state = await this.loadAndReconcile(false); return { ok: true, serverTime: new Date().toISOString(), count: state.trades.length, trades: [...state.trades].reverse().map(publicTrade) }; }
   async getAuditSummary(){const counts={};for(const table of ["campaign_archives","opportunity_scans","opportunity_records","agent_decisions","decision_outcomes"]){counts[table]=this.ctx.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).one().count;}const decisions=Object.fromEntries(this.ctx.storage.sql.exec("SELECT decision, COUNT(*) AS count FROM agent_decisions GROUP BY decision").toArray().map(row=>[row.decision,row.count]));return {ok:true,counts,decisions};}
   archiveCompetitiveState(state,resetEpoch){
     if(!state?.campaign?.id)return;
@@ -46,7 +46,6 @@ export class ArenaController extends DurableObject {
     const result=await this.ctx.storage.transaction(async txn=>{
       const stored=(await txn.get(STATE_KEY))||createInitialState(),current=reconcileState(stored,now);
       if(current.campaign.status==="ACTIVE"){
-        if(JSON.stringify(stored.round)!==JSON.stringify(current.round))await txn.put(STATE_KEY,current);
         return {state:current,created:false};
       }
       if(current.campaign.status==="COMPLETED"){
@@ -185,9 +184,9 @@ export class ArenaController extends DurableObject {
 
   async recordOrchestratorFailure(error,now){const state=await this.loadAndReconcile(),detail=error instanceof Error?error.message:"Unknown market-context error";state.market={...(state.market||{}),status:"degraded",errorCode:error?.code||"MARKET_CONTEXT_ERROR"};for(const id of ARENA_CONFIG.agents){const activity=state.agents[id].activity||defaultActivity();activity.status=Object.keys(state.agents[id].positions).length?"MONITORING POSITION":"SCANNING MARKET";activity.message=`Market intelligence unavailable: ${detail}`;activity.updatedAt=new Date(now).toISOString();state.agents[id].activity=activity;}await this.ctx.storage.put(STATE_KEY,state);}
 
-  async loadAndReconcile() {
+  async loadAndReconcile(persist = true) {
     const stored = (await this.ctx.storage.get(STATE_KEY)) || createInitialState(), state = reconcileState(stored, Date.now());
-    if (JSON.stringify(stored.campaign) !== JSON.stringify(state.campaign) || JSON.stringify(stored.round) !== JSON.stringify(state.round)) await this.ctx.storage.put(STATE_KEY, state);
+    if (persist&&(JSON.stringify(stored.campaign) !== JSON.stringify(state.campaign) || JSON.stringify(stored.round) !== JSON.stringify(state.round))) await this.ctx.storage.put(STATE_KEY, state);
     return state;
   }
 
