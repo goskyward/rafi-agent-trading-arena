@@ -19,7 +19,7 @@ export class ArenaController extends DurableObject {
     super(ctx, env);
     this.env = env;
     this.ctx.blockConcurrencyWhile(async () => {
-      initializeAuditSchema(this.ctx.storage.sql);
+      if(!auditSchemaReady(this.ctx.storage.sql))initializeAuditSchema(this.ctx.storage.sql);
       const stored=await this.ctx.storage.get(STATE_KEY),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"").trim();
       if(stored&&resetEpoch&&stored.competitiveResetEpoch!==resetEpoch){this.archiveCompetitiveState(stored,resetEpoch);const fresh=createInitialState();fresh.competitiveResetEpoch=resetEpoch;fresh.resetAt=iso(Date.now());await this.ctx.storage.put(STATE_KEY,fresh);await this.ctx.storage.deleteAlarm();}
       else if(!stored){const fresh=createInitialState();fresh.competitiveResetEpoch=resetEpoch||null;await this.ctx.storage.put(STATE_KEY,fresh);}
@@ -275,6 +275,7 @@ function assertQuoteFresh(quote, maximumAgeSeconds) {
   if (ageSeconds > maximumAgeSeconds) throw new ArenaError("STALE_QUOTE", `The quote became stale before execution (${Math.round(ageSeconds)} seconds old).`, 409);
 }
 
+function auditSchemaReady(sql){const required=["campaign_archives","opportunity_scans","opportunity_records","agent_decisions","decision_outcomes","round_scoring_settlements"];const found=new Set(sql.exec("SELECT name FROM sqlite_master WHERE type = 'table'").toArray().map(row=>row.name));return required.every(name=>found.has(name));}
 function initializeAuditSchema(sql){
   sql.exec(`CREATE TABLE IF NOT EXISTS campaign_archives (campaign_id TEXT PRIMARY KEY,archived_at TEXT NOT NULL,reset_epoch TEXT NOT NULL,arena_rules_version TEXT NOT NULL,strategy_versions TEXT NOT NULL,snapshot TEXT NOT NULL)`);
   sql.exec(`CREATE TABLE IF NOT EXISTS opportunity_scans (scan_cycle_id TEXT PRIMARY KEY,contract_version TEXT NOT NULL,engine_version TEXT NOT NULL,generated_at TEXT NOT NULL,received_at TEXT NOT NULL,expires_at TEXT NOT NULL,board_status TEXT NOT NULL,board_hash TEXT NOT NULL,source TEXT NOT NULL,evaluated_asset_count INTEGER NOT NULL,qualified_asset_count INTEGER NOT NULL,accepted_opportunity_count INTEGER NOT NULL,rejected_opportunity_count INTEGER NOT NULL,validation_result TEXT NOT NULL,normalized_board_snapshot TEXT NOT NULL,raw_validated_snapshot TEXT NOT NULL,scoring_mode TEXT,scoring_notice TEXT,cache_state TEXT,stale_state INTEGER NOT NULL,rejection_codes TEXT NOT NULL)`);
