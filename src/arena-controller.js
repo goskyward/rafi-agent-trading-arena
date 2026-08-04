@@ -33,7 +33,13 @@ export class ArenaController extends DurableObject {
   async getPositions() { const state = await this.markState(await this.loadAndReconcile(), true); return { ok: true, serverTime: new Date().toISOString(), positions: Object.fromEntries(ARENA_CONFIG.agents.map(id => [id, Object.values(state.agents[id].positions).map(publicPosition)])) }; }
   async getTrades() { const state = await this.loadAndReconcile(); return { ok: true, serverTime: new Date().toISOString(), count: state.trades.length, trades: [...state.trades].reverse().map(publicTrade) }; }
   async getAuditSummary(){const counts={};for(const table of ["campaign_archives","opportunity_scans","opportunity_records","agent_decisions","decision_outcomes"]){counts[table]=this.ctx.storage.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`).one().count;}const decisions=Object.fromEntries(this.ctx.storage.sql.exec("SELECT decision, COUNT(*) AS count FROM agent_decisions GROUP BY decision").toArray().map(row=>[row.decision,row.count]));return {ok:true,counts,decisions};}
-  archiveCompetitiveState(state,resetEpoch){if(!state?.campaign?.id)return;this.ctx.storage.sql.exec("INSERT OR IGNORE INTO campaign_archives (campaign_id,archived_at,reset_epoch,arena_rules_version,strategy_versions,snapshot) VALUES (?,?,?,?,?,?)",state.campaign.id,iso(Date.now()),resetEpoch,"1.1",JSON.stringify(STRATEGY_VERSIONS),JSON.stringify(state));}
+  archiveCompetitiveState(state,resetEpoch){
+    if(!state?.campaign?.id)return;
+    // Preserve the immutable competitive record without duplicating the large
+    // transient opportunity/mover evidence already retained in audit tables.
+    const snapshot={campaign:state.campaign,round:state.round,agents:state.agents,trades:state.trades,scoring:state.scoring,halftime:state.halftime,sequence:state.sequence};
+    this.ctx.storage.sql.exec("INSERT OR IGNORE INTO campaign_archives (campaign_id,archived_at,reset_epoch,arena_rules_version,strategy_versions,snapshot) VALUES (?,?,?,?,?,?)",state.campaign.id,iso(Date.now()),resetEpoch,"1.1",JSON.stringify(STRATEGY_VERSIONS),JSON.stringify(snapshot));
+  }
 
   async startCampaign() {
     const now = Date.now();
