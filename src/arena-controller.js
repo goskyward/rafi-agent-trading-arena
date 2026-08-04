@@ -10,6 +10,7 @@ import { decorateRound, ensureRollingScoring, publicScoring, recordDecisionScori
 import { applyHalftimeReviews, ensureHalftimeState, publicHalftime } from "./halftime-review.js";
 import { buildCandidateSnapshot, findEligibleCandidate } from "./candidate-universe.js";
 import { validatePortfolioEntry } from "./portfolio-limits.js";
+import { planEvaluationAlarm } from "./alarm-lifecycle.js";
 
 const STATE_KEY = "arena-state-v1";
 const AGENT_CADENCE_MS = 15000;
@@ -23,10 +24,11 @@ export class ArenaController extends DurableObject {
       const stored=await this.ctx.storage.get(STATE_KEY),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"").trim();
       if(stored&&resetEpoch&&stored.competitiveResetEpoch!==resetEpoch){this.archiveCompetitiveState(stored,resetEpoch);const fresh=createInitialState();fresh.competitiveResetEpoch=resetEpoch;fresh.resetAt=iso(Date.now());await this.ctx.storage.put(STATE_KEY,fresh);await this.ctx.storage.deleteAlarm();}
       else if(!stored){const fresh=createInitialState();fresh.competitiveResetEpoch=resetEpoch||null;await this.ctx.storage.put(STATE_KEY,fresh);}
+      await this.ensureEvaluationAlarm((await this.ctx.storage.get(STATE_KEY))||createInitialState(),"constructor");
     });
   }
 
-  async health() { return { available: true, objectId: this.ctx.id.toString(), storage: "sqlite" }; }
+  async health() { const state=await this.ctx.storage.get(STATE_KEY);return { available: true, objectId: this.ctx.id.toString(), storage: "sqlite", campaignId:state?.campaign?.id||null, campaignStatus:state?.campaign?.status||"NOT_STARTED", scheduledAlarm:await this.ctx.storage.getAlarm() }; }
   async getArena() { const state=await this.markState(await this.ensureActiveCampaign(),false);return this.buildArenaPayload(state,false); }
   async getScoreboard() { const state = await this.markState(await this.loadAndReconcile(false), false); return scoreboardPayload(state); }
   async getAgents() { const state = await this.markState(await this.loadAndReconcile(false), false); return { ok: true, serverTime: new Date().toISOString(), agents: publicAgents(state.agents) }; }
@@ -41,10 +43,16 @@ export class ArenaController extends DurableObject {
     this.ctx.storage.sql.exec("INSERT OR IGNORE INTO campaign_archives (campaign_id,archived_at,reset_epoch,arena_rules_version,strategy_versions,snapshot) VALUES (?,?,?,?,?,?)",state.campaign.id,iso(Date.now()),resetEpoch,"1.1",JSON.stringify(STRATEGY_VERSIONS),JSON.stringify(snapshot));
   }
 
-  async ensureActiveCampaign() {
+  async ensureEvaluationAlarm(state,source) {
+    const currentAlarm=await this.ctx.storage.getAlarm(),plan=planEvaluationAlarm(state,currentAlarm,Date.now(),AGENT_CADENCE_MS);
+    if(plan.scheduled){await this.ctx.storage.setAlarm(plan.after);console.log(JSON.stringify({event:"arena_alarm_repaired",source,before:plan.before,after:plan.after,campaignId:state.campaign.id}));}
+    return plan;
+  }
+
+  async ensureActiveCampaign(repairAlarm=true) {
     const now=Date.now(),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"").trim();
     const observed=reconcileState((await this.ctx.storage.get(STATE_KEY))||createInitialState(),now);
-    if(observed.campaign.status==="ACTIVE")return observed;
+    if(observed.campaign.status==="ACTIVE"){if(repairAlarm)await this.ensureEvaluationAlarm(observed,"ensure-active");return observed;}
     const result=await this.ctx.storage.transaction(async txn=>{
       const stored=(await txn.get(STATE_KEY))||createInitialState(),current=reconcileState(stored,now);
       if(current.campaign.status==="ACTIVE"){
@@ -59,7 +67,7 @@ export class ArenaController extends DurableObject {
       await txn.put(STATE_KEY,next);
       return {state:next,created:true};
     });
-    if(result.created)await this.ctx.storage.setAlarm(Date.now()+1000);
+    if(repairAlarm)await this.ensureEvaluationAlarm(result.state,"campaign-succession");
     return result.state;
   }
 
@@ -70,20 +78,20 @@ export class ArenaController extends DurableObject {
       if (current.campaign.status === "ACTIVE") throw new ArenaError("CAMPAIGN_ALREADY_ACTIVE", "The arena campaign is already active.", 409);
       const next=createActiveState(now,String(this.env.COMPETITIVE_RESET_EPOCH||"").trim()||current.competitiveResetEpoch||null);await txn.put(STATE_KEY,next);return next;
     });
-    await this.ctx.storage.setAlarm(now + 1000);
+    await this.ensureEvaluationAlarm(state,"campaign-start");
     return this.buildArenaPayload(state, false);
   }
 
   async resetCampaign(confirmation) {
     if (confirmation !== "RESET_ARENA") throw new ArenaError("INVALID_CONFIRMATION", "Reset requires confirm: RESET_ARENA.");
-    const resetAt=new Date().toISOString(),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"manual-staging-reset"),current=await this.ctx.storage.get(STATE_KEY);this.archiveCompetitiveState(current,resetEpoch);const state=createActiveState(Date.now(),resetEpoch);state.resetAt=resetAt;await this.ctx.storage.put(STATE_KEY,state);await this.ctx.storage.setAlarm(Date.now()+1000);
+    const resetAt=new Date().toISOString(),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"manual-staging-reset"),current=await this.ctx.storage.get(STATE_KEY);this.archiveCompetitiveState(current,resetEpoch);const state=createActiveState(Date.now(),resetEpoch);state.resetAt=resetAt;await this.ctx.storage.put(STATE_KEY,state);await this.ensureEvaluationAlarm(state,"campaign-reset");
     return this.buildArenaPayload(state,false);
   }
 
   async alarm() {
     const now=Date.now();
     try {
-      let state=await this.ensureActiveCampaign();
+      let state=await this.ensureActiveCampaign(false);
       const settlements=settleElapsedRounds(state,now);for(const settlement of settlements)this.storeRoundSettlement(settlement);const halftimeEvents=applyHalftimeReviews(state,now);if(settlements.length||halftimeEvents.length)await this.ctx.storage.put(STATE_KEY,state);
       const provider=new OpportunityEngineMarketProvider(this.env);
       const heldProducts=ARENA_CONFIG.agents.flatMap(id=>Object.keys(state.agents[id].positions));
@@ -98,7 +106,7 @@ export class ArenaController extends DurableObject {
       console.error(JSON.stringify({event:"arena_agent_cycle_error",message:error instanceof Error?error.message:"Unknown error"}));
     } finally {
       const latest=await this.ctx.storage.get(STATE_KEY);
-      if(latest?.campaign?.status==="ACTIVE")await this.ctx.storage.setAlarm(Date.now()+AGENT_CADENCE_MS);
+      if(latest?.campaign?.status==="ACTIVE")await this.ensureEvaluationAlarm(latest,"alarm-cycle");
     }
   }
 
