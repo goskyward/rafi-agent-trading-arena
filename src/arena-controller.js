@@ -19,7 +19,7 @@ export class ArenaController extends DurableObject {
     super(ctx, env);
     this.env = env;
     this.ctx.blockConcurrencyWhile(async () => {
-      if(!auditSchemaReady(this.ctx.storage.sql))initializeAuditSchema(this.ctx.storage.sql);
+      if(this.env.SKIP_AUDIT_SCHEMA_INIT!=="true"&&!auditSchemaReady(this.ctx.storage.sql))initializeAuditSchema(this.ctx.storage.sql);
       const stored=await this.ctx.storage.get(STATE_KEY),resetEpoch=String(this.env.COMPETITIVE_RESET_EPOCH||"").trim();
       if(stored&&resetEpoch&&stored.competitiveResetEpoch!==resetEpoch){this.archiveCompetitiveState(stored,resetEpoch);const fresh=createInitialState();fresh.competitiveResetEpoch=resetEpoch;fresh.resetAt=iso(Date.now());await this.ctx.storage.put(STATE_KEY,fresh);await this.ctx.storage.deleteAlarm();}
       else if(!stored){const fresh=createInitialState();fresh.competitiveResetEpoch=resetEpoch||null;await this.ctx.storage.put(STATE_KEY,fresh);}

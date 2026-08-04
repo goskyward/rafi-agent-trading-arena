@@ -13,5 +13,5 @@ assert.match(source, /async getArena\(\) \{ return this\.buildArenaPayload\(awai
 assert.match(source, /this\.ctx\.storage\.transaction\(async txn=>/, "campaign initialization must re-read and persist inside a storage transaction");
 assert.match(source, /if\(current\.campaign\.status==="ACTIVE"\)/, "active campaigns must remain unchanged");
 assert.match(source, /async alarm\(\)[\s\S]*ensureActiveCampaign\(\)/, "alarms must provide automatic campaign succession");
-assert.match(source, /if\(!auditSchemaReady\(this\.ctx\.storage\.sql\)\)initializeAuditSchema/, "existing Durable Objects must not repeat schema writes on isolate startup");
+assert.match(source, /SKIP_AUDIT_SCHEMA_INIT!=="true"&&!auditSchemaReady\(this\.ctx\.storage\.sql\)/, "existing staging Durable Objects must be able to skip schema access during quota exhaustion");
 console.log(JSON.stringify({alarmCadence:"passed",decisionIdempotency:"passed",sharedMarketContext:"passed",autoStart:"passed",concurrencyGuard:"passed",schemaWriteGuard:"passed"},null,2));

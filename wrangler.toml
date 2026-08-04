@@ -42,6 +42,7 @@ class_name = "ArenaController"
 name = "rafi-agent-trading-arena-staging"
 
 [env.staging.vars]
+SKIP_AUDIT_SCHEMA_INIT = "true"
 ALLOW_COMPETITIVE_RESET = "true"
 COMPETITIVE_RESET_EPOCH = "opord-rafi-002-clean-score-v1"
 ARENA_UAT_MODE = "true"
