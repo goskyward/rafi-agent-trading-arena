@@ -1,0 +1,5 @@
+/** @typedef {{candidateId:string,source:"RAFI_OPPORTUNITY"|"LIVE_MOVER"|"CORE_ASSET",productId:string,observedAt:string,expiresAt:string|null,eligible:boolean,referencePrice:number|null,currentPrice:number|null,percentMove:number,direction:string,volume:number|null,rank:number|null,opportunityId:string|null,scanId:string|null,moverId:string|null,evidence:object}} Candidate */
+/** @typedef {{symbol:string,quantity:number,averageEntryPrice:number,totalCostBasisUsd:number,totalEntryFeesUsd:number,openedAt:string,candidateId:string,candidateSource:string}} Position */
+/** @typedef {{agent:object,candidates:Candidate[],assets:Record<string,object>,availableSlots:number,cash:number,equity:number,campaign:object,round:object,costEstimates:object,now?:number}} StrategyContext */
+/** @typedef {{decision:"TRADE"|"SELL"|"PASS"|"MANAGE_POSITION",productId:string|null,selectedCandidateId:string|null,selectedOpportunityId:string|null,candidateSource:string|null,allocation:object|null,positionPercent?:number,reasonCode:string,reasonCodes:string[],confidence:number}} Decision */
+export const STRATEGY_TYPES_VERSION="1.0.0";
