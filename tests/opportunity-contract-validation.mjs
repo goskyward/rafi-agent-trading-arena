@@ -15,6 +15,6 @@ await assert.rejects(async()=>validateOpportunityBoard(await fixture("invalid-bo
 const observedAt=now.toISOString();
 const agent={positions:{},cashUsd:1_000_000,accountEquityUsd:1_000_000,startingBalanceUsd:1_000_000,metrics:{completedTrades:0}},assets={"BICO-USD":{price:.421,updatedAt:observedAt},"ALGO-USD":{price:.188,updatedAt:observedAt},"ZEC-USD":{price:51.3,updatedAt:observedAt}},round={number:1,remainingSeconds:200};
 const cody=new CodyStrategy().decide({agent,opportunities:first.board.opportunities,assets,round,now:now.getTime(),availableSlots:3,cash:agent.cashUsd,equity:agent.accountEquityUsd,campaign:{id:"contract-validation",progressPercent:1},costEstimates:{feeRateBps:40,slippageBps:5,syntheticSpreadBps:4}});assert.equal(cody.decision,"TRADE");assert.equal(cody.productId,"BICO-USD");
-const atlas=new AtlasStrategy().decide({agent,opportunities:first.board.opportunities,assets,round,now:now.getTime()});assert.equal(atlas.decision,"TRADE");assert.equal(atlas.productId,"ALGO-USD");
+const atlas=new AtlasStrategy().decide({agent,opportunities:first.board.opportunities,assets,round,now:now.getTime(),campaign:{id:"contract-validation",status:"ACTIVE",progressPercent:1}});assert.equal(atlas.decision,"TRADE");assert.equal(atlas.productId,"BICO-USD");
 assert.equal(stableStringify({b:1,a:2}),'{"a":2,"b":1}');
 console.log("Opportunity Contract v1.0 validation passed");
