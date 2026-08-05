@@ -12,8 +12,9 @@ const partial=await validateOpportunityBoard(await fixture("partially-rejected-b
 const empty=await validateOpportunityBoard(await fixture("empty-board.json"),now);assert.equal(empty.board.boardStatus,"EMPTY");assert.equal(boardAuthorizesBuys(empty.board,now.getTime()),false);
 const stale=await validateOpportunityBoard(await fixture("stale-board.json"),now);assert.equal(stale.board.boardStatus,"STALE");
 await assert.rejects(async()=>validateOpportunityBoard(await fixture("invalid-board.json"),now),/UNSUPPORTED_CONTRACT_MAJOR/);
-const agent={positions:{},metrics:{completedTrades:0}},assets={"BICO-USD":{price:.421},"ALGO-USD":{price:.188},"ZEC-USD":{price:51.3}},round={remainingSeconds:200};
-const cody=new CodyStrategy().decide({agent,opportunities:first.board.opportunities,assets,round});assert.equal(cody.decision,"TRADE");assert.equal(cody.productId,"BICO-USD");
-const atlas=new AtlasStrategy().decide({agent,opportunities:first.board.opportunities,assets,round});assert.equal(atlas.decision,"TRADE");assert.equal(atlas.productId,"ALGO-USD");
+const observedAt=now.toISOString();
+const agent={positions:{},cashUsd:1_000_000,accountEquityUsd:1_000_000,startingBalanceUsd:1_000_000,metrics:{completedTrades:0}},assets={"BICO-USD":{price:.421,updatedAt:observedAt},"ALGO-USD":{price:.188,updatedAt:observedAt},"ZEC-USD":{price:51.3,updatedAt:observedAt}},round={number:1,remainingSeconds:200};
+const cody=new CodyStrategy().decide({agent,opportunities:first.board.opportunities,assets,round,now:now.getTime(),availableSlots:3,cash:agent.cashUsd,equity:agent.accountEquityUsd,campaign:{id:"contract-validation",progressPercent:1},costEstimates:{feeRateBps:40,slippageBps:5,syntheticSpreadBps:4}});assert.equal(cody.decision,"TRADE");assert.equal(cody.productId,"BICO-USD");
+const atlas=new AtlasStrategy().decide({agent,opportunities:first.board.opportunities,assets,round,now:now.getTime()});assert.equal(atlas.decision,"TRADE");assert.equal(atlas.productId,"ALGO-USD");
 assert.equal(stableStringify({b:1,a:2}),'{"a":2,"b":1}');
 console.log("Opportunity Contract v1.0 validation passed");
