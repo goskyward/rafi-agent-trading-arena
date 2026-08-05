@@ -1,6 +1,7 @@
 import { ArenaController } from "./arena-controller.js";
 import { SERVICE, VERSION, EXECUTION_MODEL_VERSION } from "./config.js";
 import { OpportunityEngineMarketProvider } from "./market-provider.js";
+import { STRATEGY_METADATA, STRATEGY_VERSIONS } from "./strategies.js";
 import { ArenaError, assertFiniteTree, errorPayload, readJson, secureEqual } from "./utils.js";
 
 export { ArenaController };
@@ -11,7 +12,8 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     try {
       const stub = env.ARENA.getByName("primary-arena");
-      if (request.method === "GET" && path === "/") return json({ ok: true, service: SERVICE, version: VERSION, simulation: true, endpoints: ["/health", "/arena", "/arena/scoreboard", "/arena/agents", "/arena/positions", "/arena/trades"] }, 200, cors);
+      if (request.method === "GET" && path === "/") return json({ ok: true, service: SERVICE, version: VERSION, simulation: true, environment: env.ARENA_ENVIRONMENT || "default", endpoints: ["/health", "/arena", "/arena/scoreboard", "/arena/agents", "/arena/positions", "/arena/trades", "/strategy-registry"] }, 200, cors);
+      if (request.method === "GET" && path === "/strategy-registry") return json({ ok: true, environment: env.ARENA_ENVIRONMENT || "default", sourceBaselineCommit: env.SOURCE_BASELINE_COMMIT || null, strategyProfile: env.STRATEGY_PROFILE || null, versions: STRATEGY_VERSIONS, metadata: STRATEGY_METADATA }, 200, cors);
       if (request.method === "GET" && path === "/health") {
         const [durableObject, upstream] = await Promise.all([stub.health().catch(() => ({ available: false })), new OpportunityEngineMarketProvider(env).health()]);
         return json({ ok: true, service: SERVICE, version: VERSION, status: upstream.reachable ? "online" : "degraded", serverTime: new Date().toISOString(), simulation: true, executionModelVersion: EXECUTION_MODEL_VERSION, durableObject, opportunityEngine: upstream }, 200, cors);
