@@ -11,7 +11,7 @@ export default {
     const requestId = request.headers.get("cf-ray") || crypto.randomUUID(), url = new URL(request.url), path = normalizePath(url.pathname), cors = corsHeaders(request, env);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     try {
-      const stub = env.ARENA.getByName("primary-arena");
+      const stub = env.ARENA.getByName(env.ARENA_INSTANCE_NAME || "primary-arena");
       if (request.method === "GET" && path === "/") return json({ ok: true, service: SERVICE, version: VERSION, simulation: true, environment: env.ARENA_ENVIRONMENT || "default", endpoints: ["/health", "/arena", "/arena/scoreboard", "/arena/agents", "/arena/positions", "/arena/trades", "/strategy-registry"] }, 200, cors);
       if (request.method === "GET" && path === "/strategy-registry") return json({ ok: true, environment: env.ARENA_ENVIRONMENT || "default", sourceBaselineCommit: env.SOURCE_BASELINE_COMMIT || null, strategyProfile: env.STRATEGY_PROFILE || null, versions: STRATEGY_VERSIONS, metadata: STRATEGY_METADATA }, 200, cors);
       if (request.method === "GET" && path === "/uat-diagnostics" && env.ARENA_ENVIRONMENT === "preston-anthropic-uat") return json(await stub.getUatDiagnostics(), 200, cors);

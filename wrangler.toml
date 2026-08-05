@@ -62,6 +62,7 @@ name = "rafi-agent-trading-arena-preston-uat"
 
 [env.preston_uat.vars]
 ARENA_ENVIRONMENT = "preston-anthropic-uat"
+ARENA_INSTANCE_NAME = "preston-anthropic-v1"
 SOURCE_BASELINE_COMMIT = "4fce5001ce54838dbbbf00f903db5cdc7e3bf783"
 STRATEGY_PROFILE = "PRESTON_ANTHROPIC_V1.0.0"
 ALLOW_COMPETITIVE_RESET = "false"
